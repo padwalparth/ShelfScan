@@ -107,7 +107,7 @@ export function createSettingsPage() {
           <div style="display:flex;flex-direction:column;gap:var(--space-3);">
             <div class="meta-field">
               <label>Ingest Endpoint (LAN)</label>
-              <input type="text" value="http://192.168.0.102:8000/api/rpi/upload" readonly class="font-mono" />
+              <input type="text" value="${window.location.origin}/api/rpi/upload" readonly class="font-mono" />
             </div>
             <div class="meta-field">
               <label>Edge Client Command</label>
@@ -405,11 +405,15 @@ export function createSettingsPage() {
 
     // Ping Pi
     container.querySelector('#pingPiBtn')?.addEventListener('click', async () => {
-      showToast('Pinging Raspberry Pi node at 192.168.0.102:8000…', 'info');
+      showToast('Checking Raspberry Pi status…', 'info');
       try {
-        const res = await fetch('http://192.168.0.102:8000/api/rpi/status', { signal: AbortSignal.timeout(4000) });
-        if (res.ok) showToast('Pi node responded — connection established!', 'success');
-        else showToast('Pi responded with error: ' + res.status, 'error');
+        const res = await fetch('/api/rpi/status', { signal: AbortSignal.timeout(4000) });
+        if (res.ok) {
+          const info = await res.json();
+          showToast(`Pi status: ${info.status} (Captures: ${info.total_captures_received})`, 'success');
+        } else {
+          showToast('Pi responded with error: ' + res.status, 'error');
+        }
       } catch {
         showToast('Pi node unreachable. Check LAN connection.', 'error');
       }

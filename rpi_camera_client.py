@@ -226,8 +226,8 @@ def main():
     parser = argparse.ArgumentParser(description="BatchScan AI - Raspberry Pi Camera Client")
     parser.add_argument(
         "--server",
-        default=os.getenv("BATCHSCAN_SERVER_URL", "http://127.0.0.1:8000"),
-        help="Laptop server URL (e.g. http://192.168.1.15:8000)"
+        default=os.getenv("BATCHSCAN_SERVER_URL", "http://10.67.245.3:8000"),
+        help="Laptop server URL (default: http://10.67.245.3:8000)"
     )
     parser.add_argument(
         "--mode",

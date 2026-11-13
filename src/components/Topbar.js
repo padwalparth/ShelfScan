@@ -40,7 +40,7 @@ export function createTopbar() {
             </div>
             <div class="tooltip-row">
               <span>Raspberry Pi Node</span>
-              <span>192.168.0.102:8000</span>
+              <span>${window.location.host || '10.67.245.3:8000'}</span>
             </div>
             <div class="tooltip-row">
               <span>Supabase Cloud DB</span>

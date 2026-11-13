@@ -426,20 +426,21 @@ export function createScanPage() {
 
     // Pi capture button
     container.querySelector('#piCaptureBtn')?.addEventListener('click', async () => {
-      showToast('Requesting live capture from Raspberry Pi…', 'info');
+      showToast('Fetching latest capture from Raspberry Pi…', 'info');
       try {
-        const res  = await fetch('http://192.168.0.102:8000/api/rpi/last_capture');
+        const res  = await fetch('/api/rpi/last_capture');
         const data = await res.json();
-        if (data.image_url) {
-          const imgRes  = await fetch(data.image_url);
+        const imgUrl = data.result?.original_image_url || data.image_url;
+        if (imgUrl) {
+          const imgRes  = await fetch(imgUrl);
           const blob    = await imgRes.blob();
           const file    = new File([blob], 'pi_capture.jpg', { type: 'image/jpeg' });
           handleFile(file);
         } else {
-          showToast('Pi responded but no capture available. Check Pi camera.', 'warning');
+          showToast(data.message || 'No capture received from Raspberry Pi yet.', 'warning');
         }
       } catch {
-        showToast('Could not reach Raspberry Pi at 192.168.0.102:8000. Check LAN.', 'error');
+        showToast('Could not reach server endpoint. Check connection.', 'error');
       }
     });
 
