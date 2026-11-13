@@ -1,0 +1,110 @@
+"""Hydra Onboard — The Unified Setup Command."""
+
+import asyncio
+import sys
+import typer
+from pathlib import Path
+from hydra.ui.themes import console
+from hydra.ui.panels import banner
+
+onboard_app = typer.Typer(help="Unified installer and setup wizard")
+
+@onboard_app.callback(invoke_without_command=True)
+def onboard(
+    file: str = typer.Option("keys.json", help="Path to keys.json file"),
+):
+    """
+    🚀 One-click setup for Hydra.
+    
+    1. Checks/Installs Redis
+    2. Starts Redis
+    3. Runs Setup (Key Validation)
+    4. Offers to start Gateway
+    """
+    banner()
+    console.print("[bold cyan]🧙 Hydra Onboard Wizard[/bold cyan]")
+    console.print("We will set up everything for you.\n")
+
+    # 1. Redis Manager
+    from hydra.services.redis_service import RedisManager
+    redis_mgr = RedisManager()
+
+    console.print("[yellow]🔍 Checking Redis status...[/yellow]")
+    if redis_mgr.is_running():
+        console.print("[green]✅ Redis is already running.[/green]")
+    else:
+        console.print("[yellow]⚙️ Redis not detected. Attempting to start/install...[/yellow]")
+        try:
+            # Run async start
+            success = asyncio.run(redis_mgr.start())
+            if success:
+                console.print("[green]✅ Redis started successfully![/green]")
+            else:
+                console.print("[bold red]❌ Failed to start Redis.[/bold red]")
+                console.print("Please install Redis manually or check permissions.")
+                raise typer.Exit(code=1)
+        except Exception as e:
+            console.print(f"[bold red]❌ Error starting Redis: {e}[/bold red]")
+            raise typer.Exit(code=1)
+
+    # 2. Check keys.json
+    keys_path = Path(file)
+    if not keys_path.exists():
+        console.print(f"\n[yellow]⚠️ {file} not found![/yellow]")
+        # console.prompt is not a method. Use typer.prompt or Rich Prompt.
+        from rich.prompt import Prompt
+        choice = Prompt.ask(
+            "Press [bold]C[/bold] to Create a template, or enter a [bold]Path[/bold] to existing keys",
+            default="C"
+        )
+        
+        if choice.lower() == "c":
+            # Create template
+            import json
+            template = [
+                {
+                    "email": "your_email@gmail.com",
+                    "api_key": "AIzaSy_PASTE_YOUR_KEY_HERE",
+                    "project_id": "project-id-001"
+                }
+            ]
+            keys_path.write_text(json.dumps(template, indent=2))
+            console.print(f"[green]✅ Created {file}.[/green]")
+            console.print(f"[bold]👉 Please open {file} and add your API keys now.[/bold]")
+            typer.confirm("Press Enter once you have added your keys to the file...", default=True)
+            
+        else:
+            # Assume it's a path
+            new_path = Path(choice.strip('"').strip("'"))
+            if new_path.exists():
+                keys_path = new_path
+                console.print(f"[green]✅ Using keys from {keys_path}[/green]")
+            else:
+                console.print(f"[red]❌ File '{new_path}' not found.[/red]")
+                raise typer.Exit(1)
+
+    # 3. Run Setup Validation
+    console.print("\n[bold cyan]🔑 Validating Keys...[/bold cyan]")
+    try:
+        # Import setup logic
+        from hydra.commands.setup import _run_setup
+        asyncio.run(_run_setup(str(keys_path)))
+    except Exception as e:
+        console.print(f"[red]Setup failed: {e}[/red]")
+        # Don't exit, might be partial failure
+
+    # 4. Success & Launch
+    console.print("\n[bold green]✅ Onboard Complete![/bold green]")
+    
+    expose_choice = typer.confirm("🌍 Do you want to expose the API to the public internet (Cloudflare Tunnel)?", default=False)
+    
+    start_now = typer.confirm("🚀 Do you want to start the API Gateway now?", default=True)
+    
+    if start_now:
+        # Run gateway
+        from hydra.commands.gateway import gateway
+        console.print("[dim]Starting gateway...[/dim]\n")
+        gateway(port=8000, host="127.0.0.1", reload=False, expose=expose_choice)
+    else:
+        cmd = "hydra gateway" + (" --expose" if expose_choice else "")
+        console.print(f"👋 OK. Run [bold]{cmd}[/bold] when you are ready.")

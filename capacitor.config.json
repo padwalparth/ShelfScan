@@ -1,0 +1,10 @@
+{
+  "appId": "com.batchscan.ai",
+  "appName": "BatchScan AI",
+  "webDir": "dist",
+  "server": {
+    "url": "http://192.168.0.102:8000",
+    "cleartext": true,
+    "androidScheme": "http"
+  }
+}

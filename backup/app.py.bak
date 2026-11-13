@@ -1,0 +1,1479 @@
+import base64
+import csv
+import io
+import json
+import os
+import re
+import sys
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List
+
+# Ensure utf-8 stdout logging on Windows
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+import requests
+from PIL import Image, ImageEnhance, ImageOps
+from supabase import create_client, Client
+from barcode_scanner import (
+    scan_barcode_bytes,
+    cross_verify_with_ocr,
+    format_barcode_hit,
+    get_country_of_origin,
+    validate_checksum,
+    parse_gs1_application_identifiers
+)
+
+# Load environment variables
+load_dotenv()
+
+app = FastAPI(title="Batch OCR & Label Scanner AI", version="2.0.0")
+
+# Enable CORS for local development and web access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+IMAGES_DIR = os.path.join(BASE_DIR, "images")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+os.makedirs(STATIC_DIR, exist_ok=True)
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+# Supabase Cloud Database Client
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+supabase_client: Optional[Client] = None
+
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print(f"[Supabase] Connected to {SUPABASE_URL}")
+    except Exception as e:
+        print(f"[Supabase] Connection warning: {e}")
+
+# System prompt for structured batch extraction
+SYSTEM_PROMPT = """You are an advanced Optical Character Recognition (OCR) and pharmaceutical/consumer packaging batch code inspection AI.
+Your task is to analyze the image of a product label, carton, bottle, blister pack, or container, and extract all printed batch coding and label metadata.
+
+You must extract and return a valid JSON object strictly matching this schema:
+{
+  "batch_number": "Exact batch / lot number (e.g. F28H97, FK11G2601, B.No, Lot No.)",
+  "mfg_date": "Manufacturing date in DD/MM/YYYY or original format (e.g. 14/08/2026)",
+  "exp_date": "Expiry / Best Before date in DD/MM/YYYY or original format (e.g. 13/08/2027)",
+  "mrp": "Maximum Retail Price / Price with currency (e.g. Rs. 300.00, Rs. 110.00, ₹300)",
+  "product_name": "Product, brand, or drug name if visible on the label (or null)",
+  "manufacturer": "Manufacturer name and address if visible (or null)",
+  "full_text": "Complete transcribed raw text extracted line-by-line from the label image",
+  "confidence_score": 0.95,
+  "notes": "Any other detected information such as tax inclusion, composition, net volume/weight"
+}
+
+Critical Instructions:
+1. Pay special attention to dot-matrix, ink-jet, embossed, or laser-stamped batch lines (B.No, MFD, EXP, MRP).
+2. Distinguish clearly between MFG (Manufacturing), EXP (Expiry / Use By / Best Before), and BATCH/LOT numbers.
+3. Clean up dot-matrix artifacts while preserving exact alphanumeric characters.
+4. Output strictly valid JSON without preamble.
+"""
+
+def get_gemini_key(user_key: Optional[str] = None) -> str:
+    k = (user_key or "").strip()
+    if k and not k.startswith("nvapi-"):
+        return k
+    return os.getenv("GEMINI_API_KEY", "").strip()
+
+def get_nvidia_key(user_key: Optional[str] = None) -> str:
+    k = (user_key or "").strip()
+    if k and k.startswith("nvapi-"):
+        return k
+    return os.getenv("NVIDIA_API_KEY", "").strip()
+
+def get_default_api_key() -> str:
+    return get_gemini_key() or get_nvidia_key()
+
+def extract_json_from_text(text: str) -> Dict[str, Any]:
+    text = text.strip()
+    
+    # 1. Try direct parse
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict) and ("batch_number" in parsed or "mfg_date" in parsed):
+            return parsed
+    except Exception:
+        pass
+
+    # 2. Try code fence regex
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group(1))
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    # 3. Try outermost braces
+    brace_match = re.search(r"(\{.*\})", text, re.DOTALL)
+    if brace_match:
+        try:
+            parsed = json.loads(brace_match.group(1))
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    # 4. Resilient regex parsing for markdown / bullet responses
+    batch = None
+    mfg = None
+    exp = None
+    mrp = None
+    product = None
+    mfr = None
+
+    # Batch No regex: Matches "**Batch Number:** FK11G2601", "Batch No: FK11G2601", "B.No: FK11G2601"
+    b_match = re.search(
+        r"(?:(?:\*{1,2})?(?:batch|lot)(?:\s*(?:number|no\.?|code|#))?(?:\*{1,2})?|b\.no\.?)\s*[:\-\=]\s*(?:\*{1,2})?\s*([A-Za-z0-9\-_/]+)",
+        text,
+        re.IGNORECASE
+    )
+    if b_match:
+        val = b_match.group(1).strip()
+        if not val.lower().startswith("not") and val.lower() not in ["details", "none", "null"]:
+            batch = val
+
+    # Mfg Date regex
+    mfg_match = re.search(
+        r"(?:(?:\*{1,2})?(?:mfg(?:\.|\s*date)?|mfd(?:\.|\s*date)?|manufacturing\s*date)(?:\*{1,2})?)\s*[:\-\=]\s*(?:\*{1,2})?\s*([\d]{1,4}[\/\.\-][\d]{1,2}[\/\.\-][\d]{2,4})",
+        text,
+        re.IGNORECASE
+    )
+    if mfg_match:
+        mfg = mfg_match.group(1).strip()
+
+    # Exp Date regex
+    exp_match = re.search(
+        r"(?:(?:\*{1,2})?(?:exp(?:\.|\s*date)?|expiry(?:\s*date)?|use\s*by|best\s*before)(?:\*{1,2})?)\s*[:\-\=]\s*(?:\*{1,2})?\s*([\d]{1,4}[\/\.\-][\d]{1,2}[\/\.\-][\d]{2,4})",
+        text,
+        re.IGNORECASE
+    )
+    if exp_match:
+        exp = exp_match.group(1).strip()
+
+    # MRP regex
+    mrp_match = re.search(
+        r"(?:(?:\*{1,2})?(?:maximum\s*retail\s*price(?:\s*\(mrp\))?|m\.?r\.?p\.?(?:\s*rs\.?)?|price)(?:\*{1,2})?)\s*[:\-\=]\s*(?:\*{1,2})?\s*([^\n\r\*]+)",
+        text,
+        re.IGNORECASE
+    )
+    if mrp_match:
+        val = mrp_match.group(1).strip()
+        if not val.lower().startswith("not") and val.lower() not in ["none", "null"]:
+            mrp = val
+
+    # Product name regex
+    prod_match = re.search(
+        r"(?:(?:\*{1,2})?(?:product(?:\s*name)?|brand(?:\s*name)?)(?:\*{1,2})?)\s*[:\-\=]\s*(?:\*{1,2})?\s*([^\n\r\*]+)",
+        text,
+        re.IGNORECASE
+    )
+    if prod_match:
+        val = prod_match.group(1).strip()
+        if not val.lower().startswith("not") and val.lower() not in ["none", "null"]:
+            product = val
+
+    # Manufacturer regex
+    mfr_match = re.search(
+        r"(?:(?:\*{1,2})?(?:manufacturer|mfg\s*by|marketed\s*by)(?:\*{1,2})?)\s*[:\-\=]\s*(?:\*{1,2})?\s*([^\n\r\*]+)",
+        text,
+        re.IGNORECASE
+    )
+    if mfr_match:
+        val = mfr_match.group(1).strip()
+        if not val.lower().startswith("not") and val.lower() not in ["none", "null"]:
+            mfr = val
+
+    return {
+        "batch_number": batch,
+        "mfg_date": mfg,
+        "exp_date": exp,
+        "mrp": mrp,
+        "product_name": product,
+        "manufacturer": mfr,
+        "full_text": text,
+        "confidence_score": 0.90 if batch else 0.60,
+        "notes": "Extracted with heuristic OCR parsing."
+    }
+
+def calculate_expiry_status(exp_str: Optional[str]) -> Dict[str, Any]:
+    """Calculate shelf life status, days left, and expiration category including 5-day critical alerts."""
+    if not exp_str or str(exp_str).lower() in ["null", "none", "n/a"]:
+        return {
+            "status": "UNKNOWN",
+            "label": "No Expiry Detected",
+            "days_left": None,
+            "badge_class": "badge-neutral",
+            "is_expired": False,
+            "is_critical_5_days": False,
+            "urgency": "UNKNOWN"
+        }
+
+    # Attempt to parse common date formats (DD/MM/YYYY, YYYY-MM-DD, MM/YY, MM/YYYY, DD-MM-YYYY)
+    clean_exp = re.sub(r"[^\d/\-\.]", "", str(exp_str)).strip()
+    date_obj = None
+    for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%Y", "%m/%Y", "%m/%y", "%Y/%m/%d", "%d/%m/%y"]:
+        try:
+            date_obj = datetime.strptime(clean_exp, fmt)
+            break
+        except ValueError:
+            continue
+
+    if not date_obj:
+        return {
+            "status": "DETECTED",
+            "label": f"Exp: {exp_str}",
+            "days_left": None,
+            "badge_class": "badge-info",
+            "is_expired": False,
+            "is_critical_5_days": False,
+            "urgency": "DETECTED"
+        }
+
+    today = datetime.now()
+    delta_days = (date_obj - today).days
+
+    if delta_days < 0:
+        return {
+            "status": "EXPIRED",
+            "label": f"Expired ({abs(delta_days)} days ago)",
+            "days_left": delta_days,
+            "badge_class": "badge-danger",
+            "is_expired": True,
+            "is_critical_5_days": False,
+            "urgency": "EXPIRED"
+        }
+    elif delta_days <= 5:
+        # User requirement: Special alert 5 days before expiry
+        day_text = "today" if delta_days == 0 else (f"{delta_days} day" if delta_days == 1 else f"{delta_days} days")
+        return {
+            "status": "CRITICAL_5_DAYS",
+            "label": f"🚨 Expires in {day_text}!",
+            "days_left": delta_days,
+            "badge_class": "badge-danger pulsing-badge",
+            "is_expired": False,
+            "is_critical_5_days": True,
+            "urgency": "CRITICAL"
+        }
+    elif delta_days <= 30:
+        return {
+            "status": "EXPIRING_SOON",
+            "label": f"Expiring Soon ({delta_days} days left)",
+            "days_left": delta_days,
+            "badge_class": "badge-warning",
+            "is_expired": False,
+            "is_critical_5_days": False,
+            "urgency": "WARNING"
+        }
+    elif delta_days <= 60:
+        return {
+            "status": "EXPIRING_SOON",
+            "label": f"Shelf Life: ~{round(delta_days/30.4)} months ({delta_days}d)",
+            "days_left": delta_days,
+            "badge_class": "badge-warning",
+            "is_expired": False,
+            "is_critical_5_days": False,
+            "urgency": "WARNING"
+        }
+    else:
+        months_left = round(delta_days / 30.4)
+        return {
+            "status": "VALID",
+            "label": f"Valid ({months_left} months remaining)",
+            "days_left": delta_days,
+            "badge_class": "badge-success",
+            "is_expired": False,
+            "is_critical_5_days": False,
+            "urgency": "SAFE"
+        }
+
+def call_nvidia_nim(b64_image: str, api_key: str, model_name: str = "meta/llama-3.2-11b-vision-instruct") -> Dict[str, Any]:
+    url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+
+    # If the user requested an unavailable/deprecated model, fallback gracefully
+    if "gemma" in model_name or "neva" in model_name or "pixtral" in model_name:
+        model_name = "meta/llama-3.2-11b-vision-instruct"
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Extract all batch details: batch_number, mfg_date, exp_date, mrp, product_name, manufacturer, full_text, notes from this product packaging label."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 1024,
+        "temperature": 0.1
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=50)
+        if response.status_code == 200:
+            data = response.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return extract_json_from_text(content)
+        elif response.status_code in [404, 410] and model_name != "meta/llama-3.2-11b-vision-instruct":
+            # Retry with primary robust vision model
+            payload["model"] = "meta/llama-3.2-11b-vision-instruct"
+            response = requests.post(url, headers=headers, json=payload, timeout=50)
+            if response.status_code == 200:
+                data = response.json()
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                return extract_json_from_text(content)
+            
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"NVIDIA Vision API returned ({response.status_code}): {response.text}"
+        )
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="NVIDIA Vision model request timed out. Please try again.")
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"NVIDIA Vision API request error: {str(e)}")
+
+def call_google_gemini(b64_image: str, api_key: str, model_name: str = "gemini-3.5-flash-lite") -> Dict[str, Any]:
+    # Ensure supported model name
+    if "1.5" in model_name or "2.0" in model_name or "2.5" in model_name:
+        model_name = "gemini-3.5-flash-lite"
+
+    fallback_models = [model_name, "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.7-flash"]
+    # De-duplicate while preserving order
+    models_to_try = list(dict.fromkeys(fallback_models))
+
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "system_instruction": {
+            "parts": [{"text": SYSTEM_PROMPT}]
+        },
+        "contents": [
+            {
+                "parts": [
+                    {"text": "Extract all batch information and OCR text from this label image into strict JSON schema."},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": b64_image
+                        }
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "response_mime_type": "application/json"
+        }
+    }
+
+    last_err = None
+    for candidate in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={api_key}"
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                return extract_json_from_text(content)
+            elif response.status_code in [404, 429, 503]:
+                # Try next fallback model
+                last_err = f"Gemini ({candidate}) returned {response.status_code}: {response.text[:150]}"
+                continue
+            else:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Google Gemini API error ({response.status_code}): {response.text}"
+                )
+        except requests.exceptions.Timeout:
+            last_err = f"Gemini ({candidate}) timed out."
+            continue
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
+            last_err = str(e)
+            continue
+
+    raise HTTPException(status_code=500, detail=f"Gemini processing error across fallback models: {last_err}")
+
+def process_and_encode_image(image_bytes: bytes, enhance: bool = False, rotate_deg: int = 0) -> str:
+    """Preprocess image: optionally enhance contrast/sharpness for dot matrix code and rotate."""
+    img = Image.open(io.BytesIO(image_bytes))
+    
+    # Auto-orient based on EXIF if present
+    img = ImageOps.exif_transpose(img)
+
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    if rotate_deg != 0:
+        img = img.rotate(-rotate_deg, expand=True)
+
+    # Resize if extremely large to maintain high performance
+    max_dim = 2048
+    if max(img.size) > max_dim:
+        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+    if enhance:
+        # Increase contrast and sharpness for dot-matrix codes
+        contrast = ImageEnhance.Contrast(img)
+        img = contrast.enhance(1.35)
+        sharpness = ImageEnhance.Sharpness(img)
+        img = sharpness.enhance(1.45)
+
+    buffered = io.BytesIO()
+    img.save(buffered, format="JPEG", quality=92)
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+
+def save_scan_to_supabase(
+    data: Dict[str, Any],
+    source_filename: str,
+    expiry_info: Dict[str, Any],
+    gt_comparison: Optional[Dict[str, Any]],
+    model_used: str
+) -> Optional[str]:
+    """Persist OCR extraction to Supabase batch_scans and update inventory_batches."""
+    if not supabase_client:
+        return None
+    try:
+        row = {
+            "source_filename": source_filename,
+            "batch_number": data.get("batch_number"),
+            "mfg_date": data.get("mfg_date"),
+            "exp_date": data.get("exp_date"),
+            "mrp": data.get("mrp"),
+            "product_name": data.get("product_name"),
+            "manufacturer": data.get("manufacturer"),
+            "expiry_status": expiry_info.get("status", "UNKNOWN"),
+            "days_left": expiry_info.get("days_left"),
+            "confidence_score": float(data.get("confidence_score") or 0.95),
+            "raw_ocr_text": data.get("full_text"),
+            "extracted_json": data,
+            "model_used": model_used,
+            "ground_truth_match": gt_comparison.get("batch_match") if gt_comparison else None,
+            "notes": data.get("notes")
+        }
+        res = supabase_client.table("batch_scans").insert(row).execute()
+        scan_id = res.data[0]["id"] if res.data else None
+
+        # Also update or insert in inventory_batches master
+        batch_no = data.get("batch_number")
+        if batch_no and str(batch_no).strip() and str(batch_no).lower() not in ["none", "null", "not found"]:
+            try:
+                clean_bno = str(batch_no).strip()
+                inv_res = supabase_client.table("inventory_batches").select("*").eq("batch_number", clean_bno).execute()
+                now_str = datetime.utcnow().isoformat()
+                if inv_res.data:
+                    existing = inv_res.data[0]
+                    supabase_client.table("inventory_batches").update({
+                        "total_scans": (existing.get("total_scans") or 1) + 1,
+                        "last_scanned_at": now_str,
+                        "status": expiry_info.get("status", "VALID"),
+                        "mrp": data.get("mrp") or existing.get("mrp"),
+                        "mfg_date": data.get("mfg_date") or existing.get("mfg_date"),
+                        "exp_date": data.get("exp_date") or existing.get("exp_date"),
+                        "product_name": data.get("product_name") or existing.get("product_name")
+                    }).eq("batch_number", clean_bno).execute()
+                else:
+                    supabase_client.table("inventory_batches").insert({
+                        "batch_number": clean_bno,
+                        "product_name": data.get("product_name"),
+                        "mfg_date": data.get("mfg_date"),
+                        "exp_date": data.get("exp_date"),
+                        "mrp": data.get("mrp"),
+                        "status": expiry_info.get("status", "VALID"),
+                        "total_scans": 1,
+                        "first_scanned_at": now_str,
+                        "last_scanned_at": now_str,
+                        "notes": data.get("notes")
+                    }).execute()
+            except Exception as inv_err:
+                print(f"[Supabase Inventory Update Note]: {inv_err}")
+
+        return scan_id
+    except Exception as e:
+        print(f"[Supabase Save Note]: {e}")
+        return None
+
+
+@app.get("/api/config")
+def get_config():
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
+    has_gemini = bool(gemini_key and len(gemini_key) > 5)
+    has_nvidia = bool(nvidia_key and len(nvidia_key) > 5)
+    has_key = has_gemini or has_nvidia
+
+    masked_gemini = f"Gemini: {gemini_key[:4]}...{gemini_key[-4:]}" if has_gemini else ""
+    masked_nvidia = f"NVIDIA: {nvidia_key[:6]}...{nvidia_key[-4:]}" if has_nvidia else ""
+    previews = [p for p in [masked_gemini, masked_nvidia] if p]
+    key_preview = " | ".join(previews) if previews else "Not Configured"
+
+    has_supabase = bool(supabase_client is not None)
+    supabase_project = SUPABASE_URL.replace("https://", "").split(".")[0] if SUPABASE_URL else ""
+
+    return {
+        "has_key": has_key,
+        "has_gemini": has_gemini,
+        "has_nvidia": has_nvidia,
+        "key_preview": key_preview,
+        "has_supabase": has_supabase,
+        "supabase_project": supabase_project,
+        "supabase_url": SUPABASE_URL if has_supabase else None,
+        "default_model": "gemini-3.5-flash-lite" if has_gemini else "meta/llama-3.2-11b-vision-instruct",
+        "available_models": [
+            {"id": "gemini-3.5-flash-lite", "provider": "gemini", "name": "Google Gemini 3.5 Flash-Lite (Fastest ~1.5s · Recommended)", "recommended": True},
+            {"id": "gemini-flash-lite-latest", "provider": "gemini", "name": "Google Gemini Flash-Lite Latest", "recommended": False},
+            {"id": "gemini-3.5-flash", "provider": "gemini", "name": "Google Gemini 3.5 Flash (High Precision OCR)", "recommended": False},
+            {"id": "gemini-3.7-flash", "provider": "gemini", "name": "Google Gemini 3.7 Flash (Frontier)", "recommended": False},
+            {"id": "meta/llama-3.2-11b-vision-instruct", "provider": "nvidia", "name": "Llama 3.2 11B Vision (NVIDIA NIM)", "recommended": False}
+        ]
+    }
+
+
+# ===================================================
+# Supabase Cloud REST APIs
+# ===================================================
+@app.get("/api/supabase/status")
+def get_supabase_status():
+    if not supabase_client:
+        return {"connected": False, "url": None, "message": "Supabase credentials not configured in .env."}
+    try:
+        res = supabase_client.table("batch_scans").select("id").limit(1).execute()
+        project_id = SUPABASE_URL.replace("https://", "").split(".")[0] if SUPABASE_URL else "cloud"
+        return {
+            "connected": True,
+            "url": SUPABASE_URL,
+            "project_id": project_id,
+            "message": "Supabase Cloud Database connected."
+        }
+    except Exception as e:
+        return {"connected": False, "url": SUPABASE_URL, "error": str(e)}
+
+
+@app.get("/api/supabase/scans")
+def get_supabase_scans(
+    limit: int = Query(50, ge=1, le=200),
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None)
+):
+    if not supabase_client:
+        return {"scans": [], "total": 0, "connected": False}
+    try:
+        query = supabase_client.table("batch_scans").select("*").order("created_at", desc=True).limit(limit)
+        if status and status.upper() != "ALL":
+            query = query.eq("expiry_status", status.upper())
+        if search and search.strip():
+            query = query.ilike("batch_number", f"%{search.strip()}%")
+        res = query.execute()
+        return {
+            "scans": res.data or [],
+            "total": len(res.data or []),
+            "connected": True
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch Supabase scans: {str(e)}")
+
+
+@app.delete("/api/supabase/scans/{scan_id}")
+def delete_supabase_scan(scan_id: str):
+    if not supabase_client:
+        raise HTTPException(status_code=400, detail="Supabase not configured")
+    try:
+        res = supabase_client.table("batch_scans").delete().eq("id", scan_id).execute()
+        return {"success": True, "deleted": res.data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/supabase/scans")
+def clear_supabase_scans():
+    if not supabase_client:
+        raise HTTPException(status_code=400, detail="Supabase not configured")
+    try:
+        res = supabase_client.table("batch_scans").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+        return {"success": True, "message": "All cloud scan logs cleared."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/supabase/inventory")
+def get_supabase_inventory():
+    if not supabase_client:
+        return {"inventory": [], "connected": False}
+    try:
+        res = supabase_client.table("inventory_batches").select("*").order("last_scanned_at", desc=True).execute()
+        return {"inventory": res.data or [], "connected": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch inventory: {str(e)}")
+
+
+@app.get("/api/supabase/stats")
+def get_supabase_stats():
+    if not supabase_client:
+        return {"connected": False, "stats": {}}
+    try:
+        scans_res = supabase_client.table("batch_scans").select("id, expiry_status, ground_truth_match").execute()
+        scans = scans_res.data or []
+        total_scans = len(scans)
+        valid_count = sum(1 for s in scans if s.get("expiry_status") == "VALID")
+        expiring_count = sum(1 for s in scans if s.get("expiry_status") == "EXPIRING_SOON")
+        expired_count = sum(1 for s in scans if s.get("expiry_status") == "EXPIRED")
+        
+        gt_scans = [s for s in scans if s.get("ground_truth_match") is not None]
+        accuracy = round((sum(1 for s in gt_scans if s.get("ground_truth_match") is True) / len(gt_scans) * 100), 1) if gt_scans else 100.0
+
+        inv_res = supabase_client.table("inventory_batches").select("id").execute()
+        total_batches = len(inv_res.data or [])
+
+        return {
+            "connected": True,
+            "stats": {
+                "total_scans": total_scans,
+                "total_unique_batches": total_batches,
+                "valid_count": valid_count,
+                "expiring_count": expiring_count,
+                "expired_count": expired_count,
+                "accuracy_rate": accuracy
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===================================================
+# Advanced Inventory Intelligence & Expiry Alert Engine
+# ===================================================
+def compute_inventory_intelligence() -> Dict[str, Any]:
+    """
+    Analyzes cloud inventory data to deliver actionable merchandising intelligence:
+    - 5-Day Expiry Critical Alerts (<= 5 days)
+    - 30-Day Warning Alerts (6-30 days)
+    - Sales Velocity & Top Selling Products
+    - FIFO Shelf Rotation Suggestions & Profit Optimization Tips
+    """
+    if not supabase_client:
+        return {
+            "connected": False,
+            "alerts_5_days": [],
+            "alerts_30_days": [],
+            "expired_batches": [],
+            "healthy_batches": [],
+            "product_velocity": [],
+            "top_selling_product": None,
+            "suggestions": [],
+            "health_score": 100,
+            "financial_summary": {
+                "total_catalog_value": 0,
+                "at_risk_value_5_days": 0
+            }
+        }
+
+    try:
+        # Fetch inventory master batches and scan logs
+        inv_res = supabase_client.table("inventory_batches").select("*").execute()
+        batches = inv_res.data or []
+
+        scans_res = supabase_client.table("batch_scans").select("batch_number, product_name, mrp, expiry_status, days_left, source_filename, created_at").execute()
+        scans = scans_res.data or []
+
+        total_scans = len(scans)
+        alerts_5_days = []
+        alerts_30_days = []
+        expired_batches = []
+        healthy_batches = []
+        
+        total_catalog_val = 0.0
+        at_risk_val_5_days = 0.0
+
+        # Helper to extract price
+        def parse_mrp(val_str):
+            if not val_str:
+                return 0.0
+            nums = re.findall(r"[\d]+(?:\.[\d]{1,2})?", str(val_str).replace(",", ""))
+            return float(nums[0]) if nums else 0.0
+
+        # 1. Evaluate every batch for expiry countdown & 5-day alert
+        for b in batches:
+            exp_str = b.get("exp_date")
+            b_no = b.get("batch_number", "Unknown")
+            p_name = b.get("product_name") or f"Batch {b_no}"
+            mrp_val = parse_mrp(b.get("mrp"))
+            total_catalog_val += mrp_val * (b.get("total_scans") or 1)
+
+            exp_info = calculate_expiry_status(exp_str)
+            days = exp_info.get("days_left")
+
+            batch_item = {
+                "id": b.get("id"),
+                "batch_number": b_no,
+                "product_name": p_name,
+                "mfg_date": b.get("mfg_date") or "-",
+                "exp_date": exp_str or "-",
+                "mrp": b.get("mrp") or "-",
+                "mrp_numeric": mrp_val,
+                "total_scans": b.get("total_scans") or 1,
+                "days_left": days,
+                "status": exp_info.get("status"),
+                "urgency": exp_info.get("urgency"),
+                "label": exp_info.get("label"),
+                "last_scanned_at": b.get("last_scanned_at")
+            }
+
+            if days is not None:
+                if days < 0:
+                    batch_item["recommendation"] = "Immediate Disposal / Vendor Return (Expired Stock Write-Off)"
+                    batch_item["action_badge"] = "DISCARD / RETURN"
+                    expired_batches.append(batch_item)
+                elif days <= 5:
+                    # Specific 5-day alert requirement
+                    batch_item["recommendation"] = f"🚨 URGENT: Expires in {days}d! Apply 40-50% Clearance Markdown & Move to Front Checkout Display."
+                    batch_item["action_badge"] = "CLEARANCE SALE (50% OFF)"
+                    at_risk_val_5_days += mrp_val * (b.get("total_scans") or 1)
+                    alerts_5_days.append(batch_item)
+                elif days <= 30:
+                    batch_item["recommendation"] = f"Expiring in {days} days. Apply 15-20% discount & apply First-In-First-Out (FIFO)."
+                    batch_item["action_badge"] = "PROMO DISCOUNT"
+                    alerts_30_days.append(batch_item)
+                else:
+                    healthy_batches.append(batch_item)
+            else:
+                healthy_batches.append(batch_item)
+
+        # 2. Product Sales Velocity & Popularity Analysis (Which product sells/scans more)
+        product_map = {}
+        for s in scans:
+            p = s.get("product_name")
+            if not p or str(p).lower() in ["none", "null", "standard product packaging", "packaging batch"]:
+                # Try inferring clean label from filename
+                fname = s.get("source_filename", "")
+                if "biscuit" in fname.lower():
+                    p = "Britannia Cashew Cookies"
+                elif "chocolate" in fname.lower() or "choclate" in fname.lower():
+                    p = "Cadbury Chocolate Bar"
+                elif "fruit" in fname.lower():
+                    p = "Frooti Mango Fruit Drink"
+                elif "cheapes" in fname.lower() or "cheaps" in fname.lower():
+                    p = "Balaji Potato Chips"
+                elif "rpi" in fname.lower():
+                    p = "Pharmaceutical Packaging Pack"
+                else:
+                    p = f"Batch {s.get('batch_number', 'Product')}"
+            
+            if p not in product_map:
+                product_map[p] = {
+                    "product_name": p,
+                    "scan_count": 0,
+                    "batches": set(),
+                    "mrp_samples": [],
+                    "latest_scan": s.get("created_at")
+                }
+            
+            product_map[p]["scan_count"] += 1
+            if s.get("batch_number"):
+                product_map[p]["batches"].add(s.get("batch_number"))
+            if s.get("mrp"):
+                product_map[p]["mrp_samples"].append(s.get("mrp"))
+
+        product_velocity_list = []
+        for p, data in product_map.items():
+            sc_count = data["scan_count"]
+            share_pct = round((sc_count / total_scans * 100), 1) if total_scans > 0 else 0
+            
+            # Classification
+            if sc_count >= 3 or share_pct >= 20:
+                vel_badge = "🔥 High Velocity (Best Seller)"
+                vel_type = "HIGH"
+            elif sc_count >= 2 or share_pct >= 10:
+                vel_badge = "⚡ Moderate Movement"
+                vel_type = "MODERATE"
+            else:
+                vel_badge = "🧊 Low Movement / Slow Stock"
+                vel_type = "SLOW"
+
+            sample_mrp = data["mrp_samples"][0] if data["mrp_samples"] else "N/A"
+            product_velocity_list.append({
+                "product_name": p,
+                "total_scans": sc_count,
+                "share_percentage": share_pct,
+                "velocity_type": vel_type,
+                "velocity_badge": vel_badge,
+                "batch_count": len(data["batches"]),
+                "batches": list(data["batches"]),
+                "sample_mrp": sample_mrp
+            })
+
+        # Sort products by highest velocity
+        product_velocity_list.sort(key=lambda x: x["total_scans"], reverse=True)
+        top_selling = product_velocity_list[0] if product_velocity_list else None
+
+        # 3. Dynamic Smart Suggestions Generation
+        suggestions = []
+
+        # Suggestion 1: 5-Day Critical Expiry Alerts
+        if alerts_5_days:
+            crit_names = ", ".join([f"'{item['batch_number']}' ({item['product_name']})" for item in alerts_5_days[:2]])
+            suggestions.append({
+                "id": "sug_crit_5d",
+                "type": "URGENT_EXPIRY",
+                "icon": "🚨",
+                "badge": "Critical 5-Day Alert",
+                "badge_class": "badge-danger",
+                "title": f"{len(alerts_5_days)} Batch(es) Expiring Within 5 Days!",
+                "message": f"Batches {crit_names} are reaching their expiration cutoff in <= 5 days. Liquidate remaining stock immediately.",
+                "action_label": "Apply Clearance Discount (-50%)",
+                "action_code": "APPLY_DISCOUNT_50"
+            })
+
+        # Suggestion 2: Top Selling Product & Demand Restocking Alert
+        if top_selling:
+            suggestions.append({
+                "id": "sug_best_seller",
+                "type": "BEST_SELLER_RESTOCK",
+                "icon": "📈",
+                "badge": "Best Seller Demand",
+                "badge_class": "badge-success",
+                "title": f"Top Performing Product: {top_selling['product_name']}",
+                "message": f"Accounts for {top_selling['total_scans']} scans ({top_selling['share_percentage']}% of store activity). High inventory turnover rate detected — order next replenishment batch early.",
+                "action_label": "Forecast Supplier Restock",
+                "action_code": "RESTOCK_SUPPLIER"
+            })
+
+        # Suggestion 3: FIFO (First-In, First-Out) Rotation Directive
+        fifo_candidates = [p for p in product_velocity_list if p["batch_count"] > 1]
+        if fifo_candidates:
+            target_p = fifo_candidates[0]
+            suggestions.append({
+                "id": "sug_fifo_rotation",
+                "type": "FIFO_ROTATION",
+                "icon": "🔄",
+                "badge": "FIFO Shelf Directive",
+                "badge_class": "badge-warning",
+                "title": f"Shelf Rotation Needed for {target_p['product_name']}",
+                "message": f"Product has {target_p['batch_count']} active batches in stock ({', '.join(target_p['batches'])}). Front-face the oldest batch on customer shelves to eliminate spoilage.",
+                "action_label": "Print Shelf Rotation Task",
+                "action_code": "FIFO_ACTION"
+            })
+
+        # Suggestion 4: Slow-Moving Stock Promotion
+        slow_movers = [p for p in product_velocity_list if p["velocity_type"] == "SLOW"]
+        if slow_movers and top_selling:
+            slow_p = slow_movers[0]
+            suggestions.append({
+                "id": "sug_bundle_promo",
+                "type": "CROSS_MERCHANDISING",
+                "icon": "💡",
+                "badge": "Cross-Sell Opportunity",
+                "badge_class": "badge-info",
+                "title": f"Accelerate Slow-Moving Stock: {slow_p['product_name']}",
+                "message": f"Currently low movement ({slow_p['share_percentage']}% share). Bundle with best-seller '{top_selling['product_name']}' or position next to high-traffic aisles.",
+                "action_label": "Create Bundle Offer",
+                "action_code": "BUNDLE_OFFER"
+            })
+
+        # Calculate Store Inventory Health Score (0 - 100)
+        total_b_count = len(batches) or 1
+        expired_ratio = len(expired_batches) / total_b_count
+        crit_ratio = len(alerts_5_days) / total_b_count
+        warning_ratio = len(alerts_30_days) / total_b_count
+        
+        raw_score = 100.0 - (expired_ratio * 50) - (crit_ratio * 30) - (warning_ratio * 10)
+        health_score = max(10, min(100, round(raw_score)))
+
+        return {
+            "connected": True,
+            "health_score": health_score,
+            "total_batches_analyzed": len(batches),
+            "total_scans_analyzed": total_scans,
+            "alerts_5_days": alerts_5_days,
+            "alerts_5_days_count": len(alerts_5_days),
+            "alerts_30_days": alerts_30_days,
+            "alerts_30_days_count": len(alerts_30_days),
+            "expired_batches": expired_batches,
+            "expired_count": len(expired_batches),
+            "healthy_batches_count": len(healthy_batches),
+            "product_velocity": product_velocity_list,
+            "top_selling_product": top_selling,
+            "suggestions": suggestions,
+            "financial_summary": {
+                "total_catalog_value": round(total_catalog_val, 2),
+                "at_risk_value_5_days": round(at_risk_val_5_days, 2)
+            }
+        }
+    except Exception as e:
+        print(f"[Intelligence Error]: {e}")
+        return {
+            "connected": True,
+            "error": str(e),
+            "health_score": 100,
+            "alerts_5_days": [],
+            "product_velocity": [],
+            "suggestions": []
+        }
+
+
+@app.get("/api/supabase/intelligence")
+def get_inventory_intelligence():
+    """Returns real-time 5-day expiry alerts, product sales velocity, and AI suggestions."""
+    return compute_inventory_intelligence()
+
+
+@app.post("/api/supabase/ai-insights")
+def generate_ai_executive_insights(user_prompt: Optional[str] = Form(None)):
+    """
+    Uses Google Gemini (or NVIDIA NIM) to generate an AI Executive Merchandising & Inventory Briefing
+    based on live warehouse database telemetry.
+    """
+    intel = compute_inventory_intelligence()
+    gemini_key = get_gemini_key()
+    nvidia_key = get_nvidia_key()
+
+    if not gemini_key and not nvidia_key:
+        raise HTTPException(status_code=400, detail="API Key required to generate AI executive insights.")
+
+    top_prod = intel.get("top_selling_product", {})
+    velocity_top3 = intel.get("product_velocity", [])[:4]
+    alerts_5d = intel.get("alerts_5_days", [])
+    exp_batches = intel.get("expired_batches", [])
+
+    prompt_data = f"""
+Current Retail & Inventory Telemetry:
+- Store Health Score: {intel.get('health_score')}/100
+- Total Scanned Batches: {intel.get('total_batches_analyzed')}
+- Total Scan Events: {intel.get('total_scans_analyzed')}
+- Critical Expiry Alert (<= 5 Days left): {len(alerts_5d)} batch(es) ({[b.get('batch_number') for b in alerts_5d]})
+- Expired Batches: {len(exp_batches)} batch(es)
+- Top Velocity / Best Seller: {top_prod.get('product_name')} ({top_prod.get('total_scans')} scans, {top_prod.get('share_percentage')}% share)
+- Product Rankings: {[{'product': p.get('product_name'), 'scans': p.get('total_scans'), 'velocity': p.get('velocity_type')} for p in velocity_top3]}
+- Estimated At-Risk Inventory Value: Rs. {intel.get('financial_summary', {}).get('at_risk_value_5_days', 0)}
+- Total Estimated Catalog Value: Rs. {intel.get('financial_summary', {}).get('total_catalog_value', 0)}
+"""
+
+    llm_prompt = f"""You are the Chief Inventory Intelligence & FMCG Retail AI Officer for BatchScan AI.
+Analyze the following store inventory telemetry and provide a sharp, executive-level Retail Intelligence Briefing with bold recommendations.
+
+Telemetry:
+{prompt_data}
+
+Structure your response clearly with these sections:
+1. 🚨 **Critical 5-Day Expiry & Markdown Directives** (Immediate clearance steps for <=5 day cutoff)
+2. 📈 **Sales Velocity & Top Product Insights** (Which products sell most, why, and reorder triggers)
+3. 📦 **FIFO (First-In, First-Out) Warehouse & Shelf Management** (Preventing spoilage)
+4. 💡 **Strategic Profit & Wastage Reduction Plan** (Actionable merchandising strategies)
+
+Keep the tone professional, data-backed, concise, and formatted in clean GitHub markdown with emojis.
+"""
+
+    try:
+        if gemini_key:
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "contents": [{"parts": [{"text": llm_prompt}]}],
+                "generationConfig": {"temperature": 0.2}
+            }
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={gemini_key}"
+            res = requests.post(url, headers=headers, json=payload, timeout=25)
+            if res.status_code == 200:
+                txt = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                return {"success": True, "insights_markdown": txt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+        if nvidia_key:
+            headers = {
+                "Authorization": f"Bearer {nvidia_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "meta/llama-3.2-11b-vision-instruct",
+                "messages": [{"role": "user", "content": llm_prompt}],
+                "temperature": 0.2
+            }
+            res = requests.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=payload, timeout=30)
+            if res.status_code == 200:
+                txt = res.json()["choices"][0]["message"]["content"]
+                return {"success": True, "insights_markdown": txt, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+        raise HTTPException(status_code=500, detail="Failed to generate AI insights from model.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI Insights generation error: {str(e)}")
+
+
+@app.post("/api/supabase/seed-demo-alerts")
+def seed_demo_alerts():
+    """
+    Creates realistic sample batch records with varying expiry windows
+    (e.g., 3 days left, 2 days left, expired) so users can immediately test & see the 5-day alert engine in action.
+    """
+    if not supabase_client:
+        raise HTTPException(status_code=400, detail="Supabase client not connected")
+
+    today = datetime.now()
+    exp_3d = (today + timedelta(days=3)).strftime("%d/%m/%Y")
+    exp_2d = (today + timedelta(days=2)).strftime("%d/%m/%Y")
+    exp_past = (today - timedelta(days=10)).strftime("%d/%m/%Y")
+
+    demo_items = [
+        {
+            "batch_number": "EXP-ALERT-3D",
+            "product_name": "Dairy Fresh Milk 500ml",
+            "mfg_date": (today - timedelta(days=4)).strftime("%d/%m/%Y"),
+            "exp_date": exp_3d,
+            "mrp": "Rs. 35.00",
+            "status": "EXPIRING_SOON",
+            "total_scans": 5,
+            "first_scanned_at": today.isoformat(),
+            "last_scanned_at": today.isoformat(),
+            "notes": "Simulated Demo Batch (Expires in 3 days) for alert testing."
+        },
+        {
+            "batch_number": "EXP-ALERT-2D",
+            "product_name": "Organic Whole Wheat Bread",
+            "mfg_date": (today - timedelta(days=3)).strftime("%d/%m/%Y"),
+            "exp_date": exp_2d,
+            "mrp": "Rs. 50.00",
+            "status": "EXPIRING_SOON",
+            "total_scans": 7,
+            "first_scanned_at": today.isoformat(),
+            "last_scanned_at": today.isoformat(),
+            "notes": "Simulated Demo Batch (Expires in 2 days) for 5-day alert testing."
+        }
+    ]
+
+    inserted = []
+    for item in demo_items:
+        try:
+            # Upsert into inventory_batches
+            inv_res = supabase_client.table("inventory_batches").select("id").eq("batch_number", item["batch_number"]).execute()
+            if inv_res.data:
+                supabase_client.table("inventory_batches").update(item).eq("batch_number", item["batch_number"]).execute()
+            else:
+                supabase_client.table("inventory_batches").insert(item).execute()
+            
+            # Insert corresponding scan log
+            supabase_client.table("batch_scans").insert({
+                "source_filename": f"{item['product_name']}_AlertTest.jpg",
+                "batch_number": item["batch_number"],
+                "mfg_date": item["mfg_date"],
+                "exp_date": item["exp_date"],
+                "mrp": item["mrp"],
+                "product_name": item["product_name"],
+                "expiry_status": item["status"],
+                "days_left": 3 if "3D" in item["batch_number"] else 2,
+                "confidence_score": 0.98,
+                "raw_ocr_text": f"B.No: {item['batch_number']}\nEXP: {item['exp_date']}\nMRP: {item['mrp']}",
+                "model_used": "gemini-3.5-flash-lite",
+                "notes": item["notes"]
+            }).execute()
+
+            inserted.append(item["batch_number"])
+        except Exception as e:
+            print(f"Error seeding demo batch: {e}")
+
+    return {
+        "success": True,
+        "message": "Demo 5-day expiry alert batches generated successfully!",
+        "batches": inserted
+    }
+
+
+def load_ground_truth_map() -> Dict[str, Dict[str, str]]:
+    gt_path = os.path.join(IMAGES_DIR, "ground_truth.csv")
+    gt_map = {}
+    if os.path.exists(gt_path):
+        with open(gt_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                fname = row.get("filename", "").strip()
+                if fname:
+                    gt_map[fname] = {
+                        "batch_no": row.get("batch_no", "").strip(),
+                        "mfg_date": row.get("mfg_date", "").strip(),
+                        "exp_date": row.get("exp_date", "").strip(),
+                        "mrp": row.get("mrp", "").strip()
+                    }
+    return gt_map
+
+
+@app.get("/api/samples")
+def get_sample_images():
+    samples = []
+    ground_truth_map = load_ground_truth_map()
+
+    if os.path.exists(IMAGES_DIR):
+        for fname in sorted(os.listdir(IMAGES_DIR)):
+            if fname.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                gt = ground_truth_map.get(fname, {})
+                samples.append({
+                    "filename": fname,
+                    "url": f"/api/samples/{fname}",
+                    "ground_truth": gt
+                })
+    return {"samples": samples}
+
+
+@app.get("/api/samples/{filename}")
+def serve_sample_image(filename: str):
+    file_path = os.path.join(IMAGES_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Sample image not found")
+    return FileResponse(file_path)
+
+
+@app.get("/api/ground_truth")
+def get_ground_truth():
+    gt_map = load_ground_truth_map()
+    return {"ground_truth": gt_map}
+
+
+@app.post("/api/extract")
+def extract_label(
+    file: Optional[UploadFile] = File(None),
+    image_base64: Optional[str] = Form(None),
+    sample_name: Optional[str] = Form(None),
+    provider: Optional[str] = Form("gemini"),
+    model: Optional[str] = Form("gemini-3.5-flash-lite"),
+    api_key: Optional[str] = Form(None),
+    enhance: Optional[bool] = Form(False),
+    rotate_deg: Optional[int] = Form(0)
+):
+    image_bytes = None
+    source_filename = "Captured_Label.jpg"
+
+    if file and hasattr(file, "filename") and file.filename:
+        image_bytes = file.file.read()
+        source_filename = file.filename
+    elif sample_name:
+        sample_path = os.path.join(IMAGES_DIR, sample_name)
+        if not os.path.exists(sample_path):
+            raise HTTPException(status_code=404, detail=f"Sample file {sample_name} not found")
+        with open(sample_path, "rb") as f:
+            image_bytes = f.read()
+        source_filename = sample_name
+    elif image_base64:
+        if "base64," in image_base64:
+            image_base64 = image_base64.split("base64,")[1]
+        try:
+            image_bytes = base64.b64decode(image_base64)
+            source_filename = "Live_Camera_Capture.jpg"
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 image data: {str(e)}")
+    else:
+        raise HTTPException(status_code=400, detail="No image provided")
+
+    # Preprocess & encode image
+    try:
+        enh = enhance if isinstance(enhance, bool) else (str(enhance).lower() in ["true", "1"] if not hasattr(enhance, "default") else False)
+        rot = int(rotate_deg) if (isinstance(rotate_deg, (int, str)) and not hasattr(rotate_deg, "default") and str(rotate_deg).isdigit()) else 0
+        b64_encoded = process_and_encode_image(image_bytes, enhance=enh, rotate_deg=rot)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to process image: {str(e)}")
+
+    # Resolve Keys
+    user_key_input = (api_key if isinstance(api_key, str) else "").strip()
+    gemini_key = get_gemini_key(user_key_input)
+    nvidia_key = get_nvidia_key(user_key_input)
+
+    model_name = (model or "").lower()
+    is_nvidia_model = (
+        model_name.startswith("meta/") 
+        or model_name.startswith("nvidia/") 
+        or model_name.startswith("mistralai/")
+        or provider == "nvidia"
+    )
+
+    result_data = None
+    last_error = None
+    model_used = model or ("meta/llama-3.2-11b-vision-instruct" if is_nvidia_model else "gemini-3.5-flash-lite")
+
+    if is_nvidia_model:
+        if nvidia_key:
+            try:
+                result_data = call_nvidia_nim(b64_encoded, nvidia_key, model or "meta/llama-3.2-11b-vision-instruct")
+                model_used = model or "meta/llama-3.2-11b-vision-instruct"
+            except Exception as e:
+                last_error = str(e)
+                if gemini_key:
+                    try:
+                        result_data = call_google_gemini(b64_encoded, gemini_key, "gemini-3.5-flash-lite")
+                        model_used = "gemini-3.5-flash-lite (Auto-Fallback)"
+                    except Exception as ge:
+                        last_error += f" | Gemini fallback error: {str(ge)}"
+        elif gemini_key:
+            result_data = call_google_gemini(b64_encoded, gemini_key, "gemini-3.5-flash-lite")
+            model_used = "gemini-3.5-flash-lite"
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="API Key missing. Please provide a Google Gemini or NVIDIA NIM API key in settings or .env file."
+            )
+    else:
+        if gemini_key:
+            try:
+                result_data = call_google_gemini(b64_encoded, gemini_key, model or "gemini-3.5-flash-lite")
+                model_used = model or "gemini-3.5-flash-lite"
+            except Exception as e:
+                last_error = str(e)
+                if nvidia_key:
+                    try:
+                        result_data = call_nvidia_nim(b64_encoded, nvidia_key, "meta/llama-3.2-11b-vision-instruct")
+                        model_used = "meta/llama-3.2-11b-vision-instruct (Auto-Fallback)"
+                    except Exception as ne:
+                        last_error += f" | NVIDIA fallback error: {str(ne)}"
+        elif nvidia_key:
+            result_data = call_nvidia_nim(b64_encoded, nvidia_key, "meta/llama-3.2-11b-vision-instruct")
+            model_used = "meta/llama-3.2-11b-vision-instruct"
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="API Key missing. Please provide a Google Gemini or NVIDIA NIM API key in settings or .env file."
+            )
+
+    if result_data is None:
+        raise HTTPException(status_code=500, detail=f"OCR Extraction failed: {last_error}")
+
+    # Barcode scanning & 2D code intelligence
+    barcode_result = scan_barcode_bytes(image_bytes)
+    barcode_hit = barcode_result.get("primary")
+    cross_verification = cross_verify_with_ocr(barcode_hit, result_data)
+
+    # Enrich OCR results if barcode contains definitive data
+    if barcode_hit:
+        result_data["barcode"] = barcode_hit
+        # Reconcile batch number if missing or vague in OCR
+        gs1_batch = barcode_hit.get("gs1", {}).get("batch_number")
+        if gs1_batch and (not result_data.get("batch_number") or str(result_data.get("batch_number")).lower() in ["not found", "none", "null"]):
+            result_data["batch_number"] = gs1_batch
+            result_data["notes"] = (result_data.get("notes") or "") + f" [Batch derived from GS1 Barcode: {gs1_batch}]"
+
+        # Reconcile exp date if missing in OCR
+        gs1_exp = barcode_hit.get("gs1", {}).get("exp_date")
+        if gs1_exp and (not result_data.get("exp_date") or str(result_data.get("exp_date")).lower() in ["not found", "none", "null"]):
+            result_data["exp_date"] = gs1_exp
+
+        # Catalog enrichment
+        cat = barcode_hit.get("catalog_info")
+        if cat:
+            if not result_data.get("product_name") or any(w in str(result_data.get("product_name")).lower() for w in ["general", "standard", "not specified"]):
+                result_data["product_name"] = cat.get("product_name")
+            if not result_data.get("manufacturer") or str(result_data.get("manufacturer")).lower() in ["none", "not specified", "null"]:
+                result_data["manufacturer"] = cat.get("manufacturer")
+
+    # Expiry evaluation
+    expiry_info = calculate_expiry_status(result_data.get("exp_date"))
+
+    # Ground truth comparison
+    gt_map = load_ground_truth_map()
+    gt = gt_map.get(source_filename, None)
+    gt_comparison = None
+
+    if gt:
+        extracted_batch = str(result_data.get("batch_number") or "").strip().lower()
+        expected_batch = str(gt.get("batch_no") or "").strip().lower()
+        batch_match = (extracted_batch == expected_batch) if expected_batch else False
+        gt_comparison = {
+            "has_ground_truth": True,
+            "expected_batch": gt.get("batch_no"),
+            "expected_mfg": gt.get("mfg_date"),
+            "expected_exp": gt.get("exp_date"),
+            "expected_mrp": gt.get("mrp"),
+            "batch_match": batch_match
+        }
+
+    # Automatically persist to Supabase Cloud
+    supabase_scan_id = save_scan_to_supabase(
+        data=result_data,
+        source_filename=source_filename,
+        expiry_info=expiry_info,
+        gt_comparison=gt_comparison,
+        model_used=model_used
+    )
+
+    return {
+        "success": True,
+        "source": source_filename,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "model_used": model_used,
+        "data": result_data,
+        "expiry_analysis": expiry_info,
+        "ground_truth_comparison": gt_comparison,
+        "barcode": barcode_result,
+        "barcode_verification": cross_verification,
+        "supabase_id": supabase_scan_id,
+        "saved_to_cloud": bool(supabase_scan_id)
+    }
+
+
+@app.post("/api/barcode/scan")
+def scan_barcode_endpoint(
+    file: Optional[UploadFile] = File(None),
+    image_base64: Optional[str] = Form(None),
+    sample_name: Optional[str] = Form(None),
+    rotate_deg: Optional[int] = Form(0),
+    enhance: Optional[bool] = Form(False)
+):
+    """Instant direct barcode & 2D code scanner without LLM latency (<50ms)."""
+    image_bytes = None
+    source_filename = "Barcode_Scan.jpg"
+
+    if file and hasattr(file, "filename") and file.filename:
+        image_bytes = file.file.read()
+        source_filename = file.filename
+    elif sample_name:
+        sample_path = os.path.join(IMAGES_DIR, sample_name)
+        if not os.path.exists(sample_path):
+            raise HTTPException(status_code=404, detail=f"Sample file {sample_name} not found")
+        with open(sample_path, "rb") as f:
+            image_bytes = f.read()
+        source_filename = sample_name
+    elif image_base64:
+        if "base64," in image_base64:
+            image_base64 = image_base64.split("base64,")[1]
+        try:
+            image_bytes = base64.b64decode(image_base64)
+            source_filename = "Live_Barcode_Capture.jpg"
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 image data: {str(e)}")
+    else:
+        raise HTTPException(status_code=400, detail="No image provided for barcode scanning")
+
+    # Apply preprocessing if specified (rotation / dot-matrix enhancement)
+    try:
+        rot = int(rotate_deg) if rotate_deg else 0
+        enh = bool(enhance)
+        if rot != 0 or enh:
+            img = Image.open(io.BytesIO(image_bytes))
+            if rot != 0:
+                img = img.rotate(-rot, expand=True)
+            if enh:
+                img = ImageEnhance.Contrast(img).enhance(1.8)
+                img = ImageEnhance.Sharpness(img).enhance(1.5)
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=95)
+            image_bytes = buf.getvalue()
+    except Exception:
+        pass
+
+    barcode_result = scan_barcode_bytes(image_bytes)
+    barcode_hit = barcode_result.get("primary")
+
+    result_data = {
+        "batch_number": barcode_hit.get("gs1", {}).get("batch_number") if barcode_hit else None,
+        "mfg_date": barcode_hit.get("gs1", {}).get("mfg_date") if barcode_hit else None,
+        "exp_date": barcode_hit.get("gs1", {}).get("exp_date") if barcode_hit else None,
+        "mrp": None,
+        "product_name": barcode_hit.get("catalog_info", {}).get("product_name") if (barcode_hit and barcode_hit.get("catalog_info")) else (f"Product ({barcode_hit.get('format')})" if barcode_hit else "Packaging Label"),
+        "manufacturer": barcode_hit.get("catalog_info", {}).get("manufacturer") if (barcode_hit and barcode_hit.get("catalog_info")) else (barcode_hit.get("country") if barcode_hit else None),
+        "notes": f"Optical barcode decoded: {barcode_hit.get('format')} ({barcode_hit.get('text')})" if barcode_hit else "No barcode detected",
+        "full_text": f"[Optical Barcode Decoded]\nSymbology: {barcode_hit.get('format')}\nCode: {barcode_hit.get('text')}\nOrigin: {barcode_hit.get('country')}" if barcode_hit else "No barcode detected"
+    }
+
+    cross_verification = cross_verify_with_ocr(barcode_hit, result_data) if barcode_hit else {
+        "status": "NO_BARCODE",
+        "badge_class": "badge-neutral",
+        "message": "No optical barcode detected in this image.",
+        "aligned": False,
+        "suggestions": []
+    }
+
+    expiry_info = calculate_expiry_status(result_data.get("exp_date")) if result_data.get("exp_date") else {
+        "status": "UNKNOWN",
+        "badge_class": "badge-neutral",
+        "label": "Expiry not encoded in barcode"
+    }
+
+    supabase_scan_id = None
+    if barcode_hit and supabase_client:
+        try:
+            supabase_scan_id = save_scan_to_supabase(
+                data=result_data,
+                source_filename=source_filename,
+                expiry_info=expiry_info,
+                gt_comparison=None,
+                model_used=f"Barcode Scanner ({barcode_hit.get('format', '1D/2D')})"
+            )
+        except Exception:
+            supabase_scan_id = None
+
+    return {
+        "success": True,
+        "source": source_filename,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "model_used": f"Barcode Scanner ({barcode_hit.get('format', 'Engine')})" if barcode_hit else "Barcode Scanner",
+        "data": result_data,
+        "expiry_analysis": expiry_info,
+        "barcode": barcode_result,
+        "barcode_verification": cross_verification,
+        "supabase_id": supabase_scan_id,
+        "saved_to_cloud": bool(supabase_scan_id)
+    }
+
+
+
+@app.get("/api/barcode/lookup")
+def lookup_barcode_endpoint(code: str = Query(..., description="Barcode or GTIN number to lookup")):
+    """Lookup metadata, GS1 country origin, checksum validity and catalog info for a given barcode string."""
+    clean_code = code.strip()
+    if not clean_code:
+        raise HTTPException(status_code=400, detail="Barcode code cannot be empty")
+    digits_len = len(re.sub(r"\D", "", clean_code))
+    fmt = "EAN-13" if digits_len == 13 else ("UPC-A" if digits_len == 12 else "BARCODE")
+    hit = format_barcode_hit(clean_code, fmt, 0, False)
+    return {
+        "success": True,
+        "code": clean_code,
+        "data": hit
+    }
+
+
+# Mount static assets
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.get("/")
+def serve_index():
+    index_file = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
+    return HTMLResponse("<h1>Batch OCR AI Server running.</h1>")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)

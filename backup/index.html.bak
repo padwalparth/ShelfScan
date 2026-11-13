@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BatchScan AI · Packaging OCR & Batch Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v=2.0" />
+</head>
+<body>
+  <div class="app-background">
+    <div class="glow-orb glow-1"></div>
+    <div class="glow-orb glow-2"></div>
+    <div class="grid-overlay"></div>
+  </div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-logo">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 7V5a2 2 0 0 1 2-2h2"></path>
+            <path d="M17 3h2a2 2 0 0 1 2 2v2"></path>
+            <path d="M21 17v2a2 2 0 0 1-2 2h-2"></path>
+            <path d="M7 21H5a2 2 0 0 1-2-2v-2"></path>
+            <rect x="7" y="7" width="10" height="10" rx="1"></rect>
+            <path d="M10 12h4"></path>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">
+            <span class="gradient-text">BatchScan</span> <span class="badge-ai">AI OCR</span>
+          </div>
+          <p class="brand-subtitle">Packaging Batch Code, Expiry & Manufacturing Intelligence Scanner</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="status-indicator-pill" id="apiStatusBadge">
+          <span class="status-dot pulsing"></span>
+          <span id="apiStatusText">Checking API...</span>
+        </div>
+        <div class="status-indicator-pill status-supabase" id="supabaseStatusBadge" title="Supabase Cloud PostgreSQL Database">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+          </svg>
+          <span id="supabaseStatusText">Supabase: Connecting...</span>
+        </div>
+        <button class="btn btn-secondary btn-icon-text" id="openSettingsBtn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>AI Model & Key</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Grid -->
+    <main class="main-layout">
+      
+      <!-- Left Panel: Input & Camera Section -->
+      <section class="panel input-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <circle cx="8.5" cy="8.5" r="1.5"></circle>
+              <polyline points="21 15 16 10 5 21"></polyline>
+            </svg>
+            <h2>Image Capture & Ingestion</h2>
+          </div>
+          <div class="mode-tabs">
+            <button class="tab-btn active" data-tab="upload">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              Upload
+            </button>
+            <button class="tab-btn" data-tab="camera">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+              Live Camera
+            </button>
+            <button class="tab-btn" data-tab="samples">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
+              Samples
+            </button>
+          </div>
+        </div>
+
+        <!-- Tab Content 1: Upload -->
+        <div class="tab-pane active" id="tabUpload">
+          <div class="drop-zone" id="dropZone">
+            <input type="file" id="fileInput" accept="image/*" class="file-input-hidden" />
+            <div class="drop-zone-content">
+              <div class="upload-icon-circle">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+                  <path d="M12 12v9"></path>
+                  <path d="m16 16-4-4-4 4"></path>
+                </svg>
+              </div>
+              <p class="drop-primary">Drag & drop product label image here</p>
+              <p class="drop-secondary">or <span class="browse-link">browse files</span> from your device</p>
+              <div class="drop-hints">
+                <span>PNG, JPG, JPEG, WEBP</span>
+                <span>•</span>
+                <span>Ctrl + V to paste clipboard</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab Content 2: Live Camera -->
+        <div class="tab-pane" id="tabCamera">
+          <div class="camera-container">
+            <video id="cameraStream" autoplay playsinline muted></video>
+            <canvas id="cameraCanvas" style="display:none;"></canvas>
+            <div class="viewfinder-overlay">
+              <div class="corner-bracket top-left"></div>
+              <div class="corner-bracket top-right"></div>
+              <div class="corner-bracket bottom-left"></div>
+              <div class="corner-bracket bottom-right"></div>
+              <div class="center-crosshair"></div>
+              <div class="viewfinder-hint">Align packaging batch stamp inside frame</div>
+            </div>
+          </div>
+          <div class="camera-controls">
+            <select id="cameraSourceSelect" class="form-select">
+              <option value="">Default Camera</option>
+            </select>
+            <button class="btn btn-primary btn-capture" id="captureBtn">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="4" fill="currentColor"></circle>
+              </svg>
+              <span>Capture Frame</span>
+            </button>
+            <button class="btn btn-secondary btn-icon-text" id="scanCameraBarcodeBtn" title="Instant Barcode Scan from Live Camera Stream">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 5v14M8 5v14M12 5v14M17 5v14M21 5v14"></path>
+              </svg>
+              <span>Scan Barcode</span>
+            </button>
+            <button class="btn btn-secondary" id="toggleCameraBtn" title="Start/Stop Camera">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Tab Content 3: Sample Gallery -->
+        <div class="tab-pane" id="tabSamples">
+          <div class="samples-header">
+            <span>Select a pre-loaded sample label to test:</span>
+          </div>
+          <div class="samples-grid" id="samplesGallery">
+            <div class="sample-skeleton">Loading samples...</div>
+          </div>
+        </div>
+
+        <!-- Selected Image Preview & Toolbar -->
+        <div class="preview-card" id="previewCard" style="display: none;">
+          <div class="preview-header">
+            <span class="preview-title" id="previewFilename">image.jpg</span>
+            <div class="preview-tools">
+              <button class="tool-btn" id="rotateBtn" title="Rotate 90° Clockwise">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                <span>Rotate</span>
+              </button>
+              <button class="tool-btn" id="enhanceToggleBtn" title="Enhance Contrast & Dot-Matrix Sharpness">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                <span id="enhanceBtnText">Enhance Dot-Matrix</span>
+              </button>
+              <button class="tool-btn tool-btn-danger" id="clearImageBtn" title="Clear Image">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="preview-viewport">
+            <img id="imagePreview" alt="Selected Product Label" />
+            <div class="laser-scanner" id="laserScanner" style="display: none;"></div>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-footer">
+          <div class="action-btn-group">
+            <button class="btn btn-gradient btn-lg flex-1" id="extractBtn" disabled>
+              <span class="btn-spinner" id="btnSpinner" style="display: none;"></span>
+              <svg class="btn-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+              </svg>
+              <span id="extractBtnText">Extract All (OCR + Barcode)</span>
+            </button>
+            <button class="btn btn-barcode btn-lg btn-icon-text" id="scanBarcodeOnlyBtn" title="Instant Barcode Scan (<50ms)" disabled>
+              <span class="btn-spinner" id="barcodeBtnSpinner" style="display: none;"></span>
+              <svg class="btn-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 5v14M8 5v14M12 5v14M17 5v14M21 5v14"></path>
+              </svg>
+              <span id="scanBarcodeOnlyText">Scan Barcode Only</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Panel: Results & Intelligence Dashboard -->
+      <section class="panel results-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+            <h2>Extracted Batch Intelligence</h2>
+          </div>
+          <div class="results-meta" id="resultsMeta" style="display: none;">
+            <span class="meta-item" id="timeMeta">0.8s</span>
+            <span class="meta-item badge-pill-subtle" id="modelMeta">Llama 3.2 11B Vision</span>
+            <span class="meta-item badge-pill-cloud" id="cloudMeta" style="display: none;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+              </svg>
+              <span id="cloudMetaText">Supabase Synced</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Empty State -->
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+              <path d="M7 8h10"></path>
+              <path d="M7 12h10"></path>
+              <path d="M7 16h6"></path>
+            </svg>
+          </div>
+          <h3>No Label Processed Yet</h3>
+          <p>Capture or upload a label image, or pick a sample from the left panel, then click <strong>Extract Batch & OCR Text</strong>.</p>
+        </div>
+
+        <!-- Loading State -->
+        <div class="loading-state" id="loadingState" style="display: none;">
+          <div class="pulsing-scan-indicator">
+            <div class="radar-sweep"></div>
+          </div>
+          <h3>Analyzing Packaging Label...</h3>
+          <p class="loading-status-text" id="loadingStatusText">Decoding dot-matrix stamping & reading text...</p>
+        </div>
+
+        <!-- Populated Results Container -->
+        <div class="results-container" id="resultsContainer" style="display: none;">
+          
+          <!-- Barcode Verification & Ground Truth Validation Banners -->
+          <div class="banners-strip">
+            <div class="barcode-banner" id="barcodeBanner" style="display: none;">
+              <div class="barcode-badge-chip" id="barcodeBadgeChip">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5v14M8 5v14M12 5v14M17 5v14M21 5v14"></path></svg>
+                <span id="barcodeBannerTitle">Barcode Verified</span>
+              </div>
+              <div class="barcode-banner-details" id="barcodeBannerDetails">EAN-13 barcode detected & cross-matched.</div>
+            </div>
+
+            <div class="gt-banner" id="gtBanner" style="display: none;">
+              <div class="gt-badge" id="gtBadge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>Ground Truth Verified</span>
+              </div>
+              <div class="gt-details" id="gtDetails">Matches dataset ground truth benchmark.</div>
+            </div>
+          </div>
+
+          <!-- Primary Batch Fields Grid -->
+          <div class="batch-grid">
+            
+            <!-- Hero Batch / Lot Number Card -->
+            <div class="batch-card card-hero">
+              <div class="card-label">
+                <span class="card-icon">🏷️</span>
+                <span>BATCH / LOT NUMBER</span>
+              </div>
+              <div class="batch-value-row">
+                <div class="batch-value-lg" id="valBatchNumber">-</div>
+                <button class="btn-copy-chip" data-copy="valBatchNumber" title="Copy Batch Number">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Expiry Date Card -->
+            <div class="batch-card card-expiry">
+              <div class="card-label">
+                <span class="card-icon">⏳</span>
+                <span>EXPIRY DATE (EXP)</span>
+              </div>
+              <div class="batch-value-row">
+                <div class="batch-value-med" id="valExpDate">-</div>
+                <span class="status-pill badge-success" id="valExpiryStatusBadge">VALID</span>
+              </div>
+              <div class="expiry-subtext" id="valExpirySubtext">Calculated shelf life</div>
+            </div>
+
+            <!-- Manufacturing Date Card -->
+            <div class="batch-card">
+              <div class="card-label">
+                <span class="card-icon">📅</span>
+                <span>MANUFACTURING DATE (MFG)</span>
+              </div>
+              <div class="batch-value-med" id="valMfgDate">-</div>
+            </div>
+
+            <!-- M.R.P. Price Card -->
+            <div class="batch-card">
+              <div class="card-label">
+                <span class="card-icon">💰</span>
+                <span>MAXIMUM RETAIL PRICE (M.R.P.)</span>
+              </div>
+              <div class="batch-value-med" id="valMrp">-</div>
+            </div>
+
+            <!-- Product / Brand Name Card -->
+            <div class="batch-card">
+              <div class="card-label">
+                <span class="card-icon">📦</span>
+                <span>PRODUCT / BRAND NAME</span>
+              </div>
+              <div class="batch-value-sm" id="valProductName">Not Specified / General Label</div>
+            </div>
+
+            <!-- Barcode & GTIN Intelligence Card -->
+            <div class="batch-card card-barcode">
+              <div class="card-label">
+                <span class="card-icon">🏷️</span>
+                <span>BARCODE / GTIN & ORIGIN</span>
+                <span class="status-pill badge-neutral font-mono" id="valBarcodeSymbology">NO BARCODE</span>
+              </div>
+              <div class="batch-value-row">
+                <div class="batch-value-med font-mono" id="valBarcodeNumber">-</div>
+                <button class="btn-copy-chip" data-copy="valBarcodeNumber" title="Copy Barcode">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                </button>
+              </div>
+              <div class="barcode-sub-meta" id="valBarcodeSubMeta">
+                <span class="barcode-origin-badge" id="valBarcodeOrigin">Origin: Not detected</span>
+                <span class="barcode-checksum-pill" id="valBarcodeChecksum">Check digit: --</span>
+              </div>
+            </div>
+
+            <!-- Manufacturer Card -->
+            <div class="batch-card">
+              <div class="card-label">
+                <span class="card-icon">🏭</span>
+                <span>MANUFACTURER / ORIGIN</span>
+              </div>
+              <div class="batch-value-sm" id="valManufacturer">Not Specified / General Label</div>
+            </div>
+          </div>
+
+          <!-- Notes / Storage / Taxes Bar -->
+          <div class="notes-bar" id="notesBar">
+            <span class="notes-icon">ℹ️</span>
+            <span id="valNotes">All taxes included.</span>
+          </div>
+
+          <!-- Detailed Tabs: Full OCR Text / JSON / Verification -->
+          <div class="detail-tabs-section">
+            <div class="detail-tabs-nav">
+              <button class="detail-tab-btn active" data-dtab="ocrText">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                Full OCR Transcript
+              </button>
+              <button class="detail-tab-btn" data-dtab="barcodeDetails">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5v14M8 5v14M12 5v14M17 5v14M21 5v14"></path></svg>
+                Barcode Intelligence
+              </button>
+              <button class="detail-tab-btn" data-dtab="rawJson">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                JSON Payload
+              </button>
+            </div>
+
+            <!-- OCR Text Pane -->
+            <div class="detail-pane active" id="paneOcrText">
+              <div class="code-header">
+                <span>Line-by-line Extracted Text</span>
+                <button class="btn btn-xs btn-secondary" id="copyOcrTextBtn">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy Text</span>
+                </button>
+              </div>
+              <pre class="ocr-text-box" id="valFullText">Scanning result will appear here...</pre>
+            </div>
+
+            <!-- Barcode Intelligence Pane -->
+            <div class="detail-pane" id="paneBarcodeDetails">
+              <div class="code-header">
+                <span>Symbology, GS1 Attributes & Catalog Data</span>
+                <button class="btn btn-xs btn-secondary" id="copyBarcodeDetailsBtn">Copy Barcode Data</button>
+              </div>
+              <div class="barcode-details-box" id="valBarcodeDetailsBox">
+                <div class="barcode-empty-hint">Scan a product label with barcode to inspect GS1 details.</div>
+              </div>
+            </div>
+
+            <!-- JSON Pane -->
+            <div class="detail-pane" id="paneRawJson">
+              <div class="code-header">
+                <span>Structured JSON Output</span>
+                <div class="code-actions">
+                  <button class="btn btn-xs btn-secondary" id="copyJsonBtn">Copy JSON</button>
+                  <button class="btn btn-xs btn-secondary" id="downloadJsonBtn">Download .json</button>
+                </div>
+              </div>
+              <pre class="json-box" id="valJsonBlock">{ ... }</pre>
+            </div>
+          </div>
+
+          <!-- Bottom Action Bar -->
+          <div class="export-actions">
+            <button class="btn btn-secondary btn-icon-text" id="saveToHistoryBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+              <span>Add to Scan Log</span>
+            </button>
+            <button class="btn btn-secondary btn-icon-text" id="exportCurrentCsvBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <span>Export CSV</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Supabase Cloud Analytics & Inventory Intelligence Section -->
+    <section class="panel history-panel">
+      
+      <!-- Supabase Cloud Metrics Stats Bar -->
+      <div class="cloud-stats-grid" id="cloudStatsGrid">
+        <div class="stat-card">
+          <div class="stat-icon-wrap icon-blue">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-label">Cloud Total Scans</span>
+            <span class="stat-value" id="statTotalScans">0</span>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon-wrap icon-purple">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-label">Unique Master Batches</span>
+            <span class="stat-value" id="statUniqueBatches">0</span>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon-wrap icon-green">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-label">Valid Shelf Life</span>
+            <span class="stat-value" id="statValidCount">0</span>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon-wrap icon-amber">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-label">Expiring / Expired</span>
+            <span class="stat-value" id="statExpiringCount">0</span>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon-wrap icon-emerald">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-label">Benchmark Accuracy</span>
+            <span class="stat-value" id="statAccuracy">100%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Navigation Header for Database Views -->
+      <div class="panel-header db-panel-header">
+        <div class="db-tabs">
+          <button class="db-tab-btn" data-dbtab="intelligence">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+            <span>AI Intelligence & Expiry Alerts</span>
+            <span class="counter-badge badge-pulse-alert" id="intelAlertsBadge">0 Alerts</span>
+          </button>
+          <button class="db-tab-btn active" data-dbtab="cloud">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>
+            <span>Supabase Cloud Scans</span>
+            <span class="counter-badge" id="cloudScansCountBadge">0</span>
+          </button>
+          <button class="db-tab-btn" data-dbtab="inventory">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg>
+            <span>Master Inventory Batches</span>
+            <span class="counter-badge" id="inventoryCountBadge">0</span>
+          </button>
+          <button class="db-tab-btn" data-dbtab="local">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            <span>Local Session Log</span>
+            <span class="counter-badge" id="historyCountBadge">0</span>
+          </button>
+        </div>
+
+        <!-- Intelligence Action Controls -->
+        <div class="history-actions" id="intelToolbar" style="display: none;">
+          <button class="btn btn-sm btn-primary" id="generateAiBriefingBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+            <span id="aiBriefingBtnText">Generate AI Executive Briefing</span>
+          </button>
+          <button class="btn btn-sm btn-secondary" id="seedDemoAlertsBtn" title="Seed realistic 5-day expiry and multi-batch demo records">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg>
+            <span>Seed 5-Day Alert Demo</span>
+          </button>
+          <button class="btn btn-sm btn-secondary" id="refreshIntelBtn" title="Re-calculate Real-Time Intelligence">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+            <span>Refresh Analytics</span>
+          </button>
+        </div>
+
+        <!-- Cloud Action Controls -->
+        <div class="history-actions" id="cloudToolbar">
+          <div class="db-filter-group">
+            <input type="text" id="supabaseSearchInput" class="db-search-input" placeholder="Search batch number..." />
+            <select id="supabaseStatusFilter" class="db-status-select">
+              <option value="ALL">All Expiry Statuses</option>
+              <option value="VALID">VALID</option>
+              <option value="EXPIRING_SOON">EXPIRING SOON</option>
+              <option value="EXPIRED">EXPIRED</option>
+              <option value="UNKNOWN">UNKNOWN</option>
+            </select>
+          </div>
+          <button class="btn btn-sm btn-secondary" id="refreshCloudBtn" title="Sync & Refresh Supabase Data">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+            <span>Sync Cloud</span>
+          </button>
+          <button class="btn btn-sm btn-secondary" id="exportSupabaseCsvBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Export Cloud CSV
+          </button>
+          <button class="btn btn-sm btn-danger" id="clearSupabaseBtn">Clear Cloud DB</button>
+        </div>
+
+        <!-- Local Actions (hidden by default) -->
+        <div class="history-actions" id="localToolbar" style="display: none;">
+          <button class="btn btn-sm btn-secondary" id="exportAllCsvBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Export Local CSV
+          </button>
+          <button class="btn btn-sm btn-danger" id="clearHistoryBtn">Clear Local</button>
+        </div>
+
+        <!-- Inventory Actions (hidden by default) -->
+        <div class="history-actions" id="inventoryToolbar" style="display: none;">
+          <button class="btn btn-sm btn-secondary" id="refreshInventoryBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+            <span>Refresh Master</span>
+          </button>
+          <button class="btn btn-sm btn-secondary" id="exportInventoryCsvBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Export Master CSV
+          </button>
+        </div>
+      </div>
+
+      <!-- Tab View 0: AI Intelligence & Merchandising Analytics Pane -->
+      <div class="db-pane" id="paneIntelligence">
+        <div class="intel-dashboard-container">
+          
+          <!-- Key Metrics Banner -->
+          <div class="intel-metrics-strip">
+            <div class="intel-metric-card metric-health">
+              <div class="metric-icon-circle">
+                <span id="intelHealthEmoji">🛡️</span>
+              </div>
+              <div class="metric-text-group">
+                <span class="metric-label">Store Freshness & Health</span>
+                <div class="metric-val-row">
+                  <span class="metric-val" id="intelHealthScore">--</span>
+                  <span class="metric-sub" id="intelHealthStatus">Calculating...</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="intel-metric-card metric-risk">
+              <div class="metric-icon-circle">
+                <span>🚨</span>
+              </div>
+              <div class="metric-text-group">
+                <span class="metric-label">5-Day Expiry At-Risk Value</span>
+                <div class="metric-val-row">
+                  <span class="metric-val font-mono" id="intelAtRiskValue">Rs. 0.00</span>
+                  <span class="metric-badge-danger" id="intel5DayCountBadge">0 Batches</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="intel-metric-card metric-bestseller">
+              <div class="metric-icon-circle">
+                <span>🔥</span>
+              </div>
+              <div class="metric-text-group">
+                <span class="metric-label">Top Selling Demand SKU</span>
+                <div class="metric-val-row">
+                  <span class="metric-val-truncate" id="intelTopSellerName">No Data</span>
+                  <span class="metric-badge-success" id="intelTopSellerShare">0% Share</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 1: Critical 5-Day Expiry Alerts (Prominent Visual Warnings) -->
+          <div class="intel-section-box section-critical-alerts">
+            <div class="section-box-header">
+              <div class="section-title">
+                <span class="section-icon pulse-glow">🚨</span>
+                <div>
+                  <h3>Critical 5-Day Expiry Alerts</h3>
+                  <p>Batches with shelf-life expiring in 5 days or fewer — immediate markdown & liquidation required</p>
+                </div>
+              </div>
+              <div class="section-badge-counter" id="criticalAlertsCounter">0 Active Alerts</div>
+            </div>
+
+            <div class="alerts-cards-grid" id="criticalAlertsContainer">
+              <div class="alert-empty-card">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
+                <span>No batches expiring within the 5-day cutoff. Inventory freshness is optimal!</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 2: Two Column Analytics (Product Sales Velocity & Smart AI Suggestions) -->
+          <div class="intel-split-grid">
+            
+            <!-- Left: Product Sales Velocity & Turnover -->
+            <div class="intel-section-box">
+              <div class="section-box-header">
+                <div class="section-title">
+                  <span class="section-icon">📈</span>
+                  <div>
+                    <h3>Product Sales Velocity & Demand</h3>
+                    <p>Analysis of scan frequencies, inventory turnover, and best-seller share</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="velocity-table-wrap">
+                <table class="velocity-table" id="velocityTable">
+                  <thead>
+                    <tr>
+                      <th>Product / Brand</th>
+                      <th>Velocity Status</th>
+                      <th>Scan Volume</th>
+                      <th>Activity Share</th>
+                    </tr>
+                  </thead>
+                  <tbody id="velocityTableBody">
+                    <tr>
+                      <td colspan="4" class="text-center">Awaiting scan telemetry...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Right: Dynamic Inventory Suggestions & Directives -->
+            <div class="intel-section-box">
+              <div class="section-box-header">
+                <div class="section-title">
+                  <span class="section-icon">💡</span>
+                  <div>
+                    <h3>Smart Merchandising Suggestions</h3>
+                    <p>Automated markdown, replenishment, and FIFO shelf directives</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="suggestions-list" id="suggestionsContainer">
+                <div class="suggestion-skeleton">Loading smart recommendations...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 3: AI Executive Merchandising Briefing (Powered by Gemini) -->
+          <div class="intel-section-box section-ai-briefing">
+            <div class="section-box-header">
+              <div class="section-title">
+                <span class="section-icon">🤖</span>
+                <div>
+                  <h3>Executive Retail AI Briefing</h3>
+                  <p>Strategic markdown actions, FIFO rotation commands, and inventory optimization summary</p>
+                </div>
+              </div>
+              <div class="ai-briefing-actions">
+                <span class="briefing-time-tag" id="aiBriefingTimestamp">Ready to generate</span>
+                <button class="btn btn-xs btn-secondary" id="copyAiBriefingBtn">Copy Markdown</button>
+              </div>
+            </div>
+
+            <div class="ai-briefing-content" id="aiBriefingContent">
+              <div class="ai-briefing-placeholder">
+                <p>Click <strong>"Generate AI Executive Briefing"</strong> above to produce an AI-powered retail intelligence report using Google Gemini / NVIDIA NIM.</p>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Tab View 1: Supabase Cloud Scans Table -->
+      <div class="db-pane active" id="paneCloudScans">
+        <div class="table-responsive">
+          <table class="history-table" id="supabaseTable">
+            <thead>
+              <tr>
+                <th>Created At (UTC)</th>
+                <th>Source Label</th>
+                <th>Batch / Lot No</th>
+                <th>Barcode / GTIN</th>
+                <th>Product / Brand</th>
+                <th>Mfg Date</th>
+                <th>Exp Date</th>
+                <th>Status</th>
+                <th>Model</th>
+                <th>M.R.P.</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="supabaseTableBody">
+              <tr class="empty-row">
+                <td colspan="11">Connecting to Supabase Cloud Database...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Tab View 2: Master Inventory Batches Table -->
+      <div class="db-pane" id="paneInventoryMaster">
+        <div class="table-responsive">
+          <table class="history-table" id="inventoryTable">
+            <thead>
+              <tr>
+                <th>Batch Number</th>
+                <th>Product / Brand</th>
+                <th>Mfg Date</th>
+                <th>Expiry Date</th>
+                <th>Status</th>
+                <th>M.R.P.</th>
+                <th>Scan Frequency</th>
+                <th>First Scanned</th>
+                <th>Last Scanned</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="inventoryTableBody">
+              <tr class="empty-row">
+                <td colspan="10">Loading master batch inventory...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Tab View 3: Local Session Log Table -->
+      <div class="db-pane" id="paneLocalHistory">
+        <div class="table-responsive">
+          <table class="history-table" id="historyTable">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Source / Label</th>
+                <th>Batch Number</th>
+                <th>Mfg Date</th>
+                <th>Expiry Date</th>
+                <th>Status</th>
+                <th>M.R.P.</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody">
+              <tr class="empty-row">
+                <td colspan="8">No scan records saved in this session. Process a label to see logs.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal-backdrop" id="settingsModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          <h3>AI OCR Engine & Cloud Settings</h3>
+        </div>
+        <button class="modal-close" id="closeSettingsBtn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        
+        <!-- Supabase Cloud Connection Box -->
+        <div class="cloud-settings-card">
+          <div class="cloud-card-header">
+            <div class="cloud-card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2">
+                <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+              </svg>
+              <span>Supabase Cloud PostgreSQL</span>
+            </div>
+            <span class="status-pill badge-success" id="settingsSupabasePill">Active</span>
+          </div>
+          <div class="cloud-card-details">
+            <div class="detail-row">
+              <span class="detail-label">Project URL:</span>
+              <span class="detail-val font-mono" id="settingsSupabaseUrl">-</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Tables:</span>
+              <span class="detail-val"><code>batch_scans</code>, <code>inventory_batches</code></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="settingsApiKey">
+            <span>Custom Vision AI API Key (Optional Override)</span>
+            <span class="label-badge" id="envKeyBadge">Loaded from .env</span>
+          </label>
+          <div class="input-with-action">
+            <input type="password" id="settingsApiKey" class="form-input" placeholder="Google Gemini (AIza... / AQ...) or NVIDIA (nvapi-...)" />
+            <button class="btn btn-secondary btn-sm" id="toggleApiKeyVisibility">Show</button>
+          </div>
+          <p class="form-hint">Supports Google Gemini API keys and NVIDIA NIM keys. Leave blank to use configured <code>.env</code> keys.</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="settingsModel">Vision AI Model</label>
+          <select id="settingsModel" class="form-select">
+            <option value="gemini-3.5-flash-lite" selected>Google Gemini 3.5 Flash-Lite (Fastest ~1.5s · Recommended)</option>
+            <option value="gemini-flash-lite-latest">Google Gemini Flash-Lite Latest</option>
+            <option value="gemini-3.5-flash">Google Gemini 3.5 Flash (High Precision OCR)</option>
+            <option value="gemini-3.7-flash">Google Gemini 3.7 Flash (Frontier)</option>
+            <option value="meta/llama-3.2-11b-vision-instruct">Llama 3.2 11B Vision (NVIDIA NIM)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Pre-processing Defaults</label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="defaultEnhanceCheckbox" />
+            <span>Always apply Dot-Matrix Contrast & Sharpness Boost</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="cancelSettingsBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveSettingsBtn">Save Configuration</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Toast -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/static/app.js?v=2.0"></script>
+</body>
+</html>

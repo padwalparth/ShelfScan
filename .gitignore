@@ -1,0 +1,39 @@
+# Environment variables
+.env
+.env.production
+.env.development
+.env.local
+.env.*.local
+*.env
+
+# Node modules & build outputs
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Mobile & Capacitor build artifacts
+android/app/build/
+android/.gradle/
+android/build/
+android/captures/
+ios/App/build/
+ios/App/Pods/
+*.apk
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+

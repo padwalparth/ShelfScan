@@ -1,0 +1,83 @@
+/* ============================================================================
+   BatchScan Themes (Dark Default & Polished Light)
+   ============================================================================ */
+
+/* ── Dark Theme (Default) ─────────────────────────────────────────── */
+:root,
+[data-theme="dark"] {
+  --color-scheme: dark;
+
+  --bg-app: #080b11;
+  --bg-sidebar: #0b0f19;
+  --bg-topbar: rgba(11, 15, 25, 0.85);
+  --bg-card: #0f1523;
+  --bg-card-hover: #141c2e;
+  --bg-card-active: #18233a;
+  --bg-subtle: rgba(255, 255, 255, 0.03);
+  --bg-input: #0b0f19;
+  --bg-input-hover: #111726;
+  --bg-overlay: rgba(0, 0, 0, 0.7);
+
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-inverse: #0b0f19;
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-medium: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --border-focus: var(--accent-teal);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 24px var(--accent-teal-glow);
+
+  --table-header-bg: #0c111d;
+  --table-row-hover: rgba(255, 255, 255, 0.025);
+  --table-row-alt: rgba(255, 255, 255, 0.015);
+  --table-sticky-bg: #0f1523;
+
+  --skeleton-base: rgba(255, 255, 255, 0.05);
+  --skeleton-highlight: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Light Theme ──────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --color-scheme: light;
+
+  --bg-app: #f8fafc;
+  --bg-sidebar: #ffffff;
+  --bg-topbar: rgba(255, 255, 255, 0.9);
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8fafc;
+  --bg-card-active: #f1f5f9;
+  --bg-subtle: #f1f5f9;
+  --bg-input: #ffffff;
+  --bg-input-hover: #f8fafc;
+  --bg-overlay: rgba(15, 23, 42, 0.45);
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --text-inverse: #ffffff;
+
+  --border-subtle: #e2e8f0;
+  --border-medium: #cbd5e1;
+  --border-strong: #94a3b8;
+  --border-focus: #059669;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 12px 28px rgba(15, 23, 42, 0.12);
+  --shadow-glow: 0 0 20px rgba(16, 185, 129, 0.15);
+
+  --table-header-bg: #f8fafc;
+  --table-row-hover: #f1f5f9;
+  --table-row-alt: #fafbfc;
+  --table-sticky-bg: #ffffff;
+
+  --skeleton-base: #e2e8f0;
+  --skeleton-highlight: #f1f5f9;
+}
+

@@ -1,0 +1,720 @@
+"""
+BatchScan AI · Automatic Label Detection, Cropping & Image Enhancement Engine
+=============================================================================
+Modular Computer Vision pipeline for product and pharmaceutical packaging.
+Supports:
+  1. YOLO Object Detection (when custom weights 'label_yolo.pt' or 'best.pt' are present).
+  2. Gemini Vision Statutory Area Detection — targets MRP + Batch + MFD + EXP panel specifically.
+  3. Advanced OpenCV Multi-Scale Text-Density & Gradient Morphological Detection (fallback).
+  4. Perspective Rectification & Skew/Orientation Correction.
+  5. Adaptive Padding & Border Clamping (prevents text clipping).
+  6. Contrast & Resolution Image Enhancement (CLAHE, Bilateral Denoising, Unsharp Mask).
+  7. Date Format & Logical Validation Engine (MFG vs EXP, DD/MM/YYYY, MM/YYYY, confidence scoring).
+"""
+
+import os
+import re
+import cv2
+import base64
+import json
+import numpy as np
+from datetime import datetime
+from typing import Optional, Dict, Any, Tuple, List
+from PIL import Image, ImageOps, ImageEnhance
+
+try:
+    import requests as _http_requests
+except ImportError:
+    _http_requests = None
+
+# Directory Setup for image persistence
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+IMAGES_DIR = os.path.join(BASE_DIR, "images")
+ORIGINAL_DIR = os.path.join(IMAGES_DIR, "original")
+CROPPED_DIR = os.path.join(IMAGES_DIR, "cropped")
+ENHANCED_DIR = os.path.join(IMAGES_DIR, "enhanced")
+
+for d in [ORIGINAL_DIR, CROPPED_DIR, ENHANCED_DIR]:
+    os.makedirs(d, exist_ok=True)
+
+# YOLO Model Cache
+_YOLO_MODEL = None
+_YOLO_TRIED_LOAD = False
+
+def get_yolo_model():
+    """
+    Attempts to load a trained YOLO model if custom weights exist.
+    Checks for:
+      - YOLO_LABEL_MODEL env var
+      - label_yolo.pt in project root or models/
+      - best.pt in project root or models/
+    """
+    global _YOLO_MODEL, _YOLO_TRIED_LOAD
+    if _YOLO_TRIED_LOAD:
+        return _YOLO_MODEL
+
+    _YOLO_TRIED_LOAD = True
+    candidate_paths = [
+        os.getenv("YOLO_LABEL_MODEL", ""),
+        os.path.join(BASE_DIR, "label_yolo.pt"),
+        os.path.join(BASE_DIR, "best.pt"),
+        os.path.join(BASE_DIR, "models", "label_yolo.pt"),
+        os.path.join(BASE_DIR, "models", "best.pt"),
+    ]
+
+    model_path = None
+    for cp in candidate_paths:
+        if cp and os.path.exists(cp):
+            model_path = cp
+            break
+
+    if model_path:
+        try:
+            from ultralytics import YOLO
+            _YOLO_MODEL = YOLO(model_path)
+            print(f"[LabelDetector] Successfully loaded custom YOLO model from: {model_path}")
+        except Exception as e:
+            print(f"[LabelDetector] Warning: Could not load YOLO model at {model_path}: {e}")
+            _YOLO_MODEL = None
+    else:
+        # Note: Do not use generic pretrained YOLO (COCO) since it detects person/bottle/cup,
+        # not the specific batch code/information label panel.
+        print("[LabelDetector] No custom YOLO weights found (label_yolo.pt/best.pt). "
+              "Using OpenCV Intelligent Label Detection Pipeline.")
+        _YOLO_MODEL = None
+
+    return _YOLO_MODEL
+
+
+# =============================================================================
+# OpenCV Intelligent Information Area Detector
+# =============================================================================
+def detect_label_opencv(
+    img_bgr: np.ndarray,
+    padding_pct: float = 0.10
+) -> Dict[str, Any]:
+    """
+    Automatically detects the information label area on packaging using
+    multi-scale gradient analysis, text-density morphological pooling,
+    and contour energy ranking.
+    
+    Parameters:
+      img_bgr: Source image in BGR format
+      padding_pct: Safety padding percentage added around detected bounds (0.05 to 0.20)
+      
+    Returns:
+      Dictionary with:
+        - 'box': [x1, y1, x2, y2]
+        - 'confidence': float (0.0 to 1.0)
+        - 'method': 'opencv_text_density' or 'opencv_panel_contour' or 'fallback_full_frame'
+        - 'deskew_angle': float
+        - 'quad_points': 4 corner points if perspective quadrilateral was found, else None
+    """
+    h, w = img_bgr.shape[:2]
+    total_area = h * w
+
+    # Scale down for fast processing if image is huge
+    max_proc_dim = 1200
+    scale = 1.0
+    if max(h, w) > max_proc_dim:
+        scale = max_proc_dim / max(h, w)
+        proc_w = int(w * scale)
+        proc_h = int(h * scale)
+        small_bgr = cv2.resize(img_bgr, (proc_w, proc_h), interpolation=cv2.INTER_AREA)
+    else:
+        small_bgr = img_bgr
+        proc_w, proc_h = w, h
+
+    # 1. Grayscale
+    gray = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2GRAY)
+
+    # 2. Multi-strategy Candidate Search
+    candidates = []
+
+    # Strategy A: Text-density gradient pooling (detects stamped & printed text lines)
+    # Compute horizontal and vertical Scharr/Sobel gradients
+    grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    grad_mag = cv2.magnitude(grad_x, grad_y)
+    grad_norm = cv2.normalize(grad_mag, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+
+    # Gaussian blur to bridge character gaps
+    blurred = cv2.GaussianBlur(grad_norm, (7, 7), 0)
+
+    # Morphological closing with horizontal rectangular kernel (connects lines of text)
+    kernel_text = cv2.getStructuringElement(cv2.MORPH_RECT, (int(28 * scale) or 15, int(9 * scale) or 5))
+    text_density_map = cv2.morphologyEx(blurred, cv2.MORPH_CLOSE, kernel_text)
+
+    # Otsu thresholding to segment high-density text clusters
+    _, thresh_text = cv2.threshold(text_density_map, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Further close with vertical dilation to group multi-line labels (MFG + EXP + B.No)
+    kernel_block = cv2.getStructuringElement(cv2.MORPH_RECT, (int(15 * scale) or 9, int(19 * scale) or 11))
+    text_blocks = cv2.morphologyEx(thresh_text, cv2.MORPH_CLOSE, kernel_block)
+
+    # Find external contours of text blocks
+    contours_a, _ = cv2.findContours(text_blocks, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for c in contours_a:
+        area = cv2.contourArea(c)
+        # Filter: area between 1.5% and 85% of total frame
+        if 0.015 * (proc_h * proc_w) < area < 0.88 * (proc_h * proc_w):
+            x, y, cw, ch = cv2.boundingRect(c)
+            aspect = cw / float(ch) if ch > 0 else 0
+            # Aspect ratio for label blocks typically between 0.35 and 6.0
+            if 0.35 <= aspect <= 6.0:
+                # Calculate internal edge density (text concentration)
+                roi_grad = grad_norm[y:y+ch, x:x+cw]
+                mean_density = float(np.mean(roi_grad)) if roi_grad.size > 0 else 0.0
+                candidates.append({
+                    'rect': (x, y, cw, ch),
+                    'area': area,
+                    'density': mean_density,
+                    'contour': c,
+                    'method': 'opencv_text_density'
+                })
+
+    # Strategy B: Packaging Panel / Sticker Edge Detection
+    # Many medicine packs / bottles have a distinct white or colored printed rectangle
+    bilateral = cv2.bilateralFilter(gray, 7, 50, 50)
+    edges = cv2.Canny(bilateral, 50, 150)
+    kernel_edge = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges_closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_edge)
+    contours_b, _ = cv2.findContours(edges_closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    for c in contours_b:
+        area = cv2.contourArea(c)
+        if 0.04 * (proc_h * proc_w) < area < 0.85 * (proc_h * proc_w):
+            x, y, cw, ch = cv2.boundingRect(c)
+            aspect = cw / float(ch) if ch > 0 else 0
+            if 0.4 <= aspect <= 5.0:
+                roi_grad = grad_norm[y:y+ch, x:x+cw]
+                mean_density = float(np.mean(roi_grad)) if roi_grad.size > 0 else 0.0
+                if mean_density > 25.0:  # Must contain text
+                    candidates.append({
+                        'rect': (x, y, cw, ch),
+                        'area': area,
+                        'density': mean_density,
+                        'contour': c,
+                        'method': 'opencv_panel_contour'
+                    })
+
+    # 3. If no candidate met threshold, try grouping multiple smaller text lines
+    if not candidates and contours_a:
+        # Merge top 3 largest text contours
+        valid_c = [c for c in contours_a if cv2.contourArea(c) > 0.005 * (proc_h * proc_w)]
+        if valid_c:
+            all_pts = np.vstack(valid_c)
+            x, y, cw, ch = cv2.boundingRect(all_pts)
+            candidates.append({
+                'rect': (x, y, cw, ch),
+                'area': cw * ch,
+                'density': 30.0,
+                'contour': all_pts,
+                'method': 'opencv_merged_text'
+            })
+
+    # 4. Evaluate and select best candidate
+    if candidates:
+        # Score candidates based on text density and reasonable size (prefer 10% - 60% coverage)
+        def score_candidate(cand):
+            rel_area = cand['area'] / (proc_h * proc_w)
+            # Area penalty for extreme sizes
+            area_score = 1.0 - abs(rel_area - 0.25)
+            # Density score (higher text edge density = more text)
+            density_score = min(cand['density'] / 80.0, 1.5)
+            return density_score * 0.65 + area_score * 0.35
+
+        candidates.sort(key=score_candidate, reverse=True)
+        best = candidates[0]
+        bx, by, bw, bh = best['rect']
+        selected_contour = best['contour']
+
+        # Check for 4-point perspective quadrilateral
+        quad_points = None
+        deskew_angle = 0.0
+        try:
+            peri = cv2.arcLength(selected_contour, True)
+            approx = cv2.approxPolyDP(selected_contour, 0.04 * peri, True)
+            if len(approx) == 4 and cv2.isContourConvex(approx):
+                # Scale corners back to original image size
+                quad_points = [[float(pt[0][0] / scale), float(pt[0][1] / scale)] for pt in approx]
+            else:
+                # Check minAreaRect angle
+                rect = cv2.minAreaRect(selected_contour)
+                angle = rect[-1]
+                if angle < -45:
+                    angle = -(90 + angle)
+                elif angle > 45:
+                    angle = 90 - angle
+                if abs(angle) > 1.5:
+                    deskew_angle = float(angle)
+        except Exception:
+            pass
+
+        # Map back to original coordinate space
+        orig_x = int(bx / scale)
+        orig_y = int(by / scale)
+        orig_w = int(bw / scale)
+        orig_h = int(bh / scale)
+
+        # Add adaptive padding to avoid cutting off edge characters (e.g. "MFG", "EXP", "Rs.")
+        pad_x = int(orig_w * padding_pct)
+        pad_y = int(orig_h * padding_pct)
+
+        x1 = max(0, orig_x - pad_x)
+        y1 = max(0, orig_y - pad_y)
+        x2 = min(w, orig_x + orig_w + pad_x)
+        y2 = min(h, orig_y + orig_h + pad_y)
+
+        # Compute confidence based on edge density & contrast
+        conf = min(0.96, max(0.55, best['density'] / 65.0))
+
+        return {
+            'box': [x1, y1, x2, y2],
+            'confidence': round(conf, 2),
+            'method': best['method'],
+            'deskew_angle': round(deskew_angle, 2),
+            'quad_points': quad_points,
+            'status': 'detected'
+        }
+
+    # Safe Fallback: Return full frame with safe border margin
+    margin_x = int(w * 0.02)
+    margin_y = int(h * 0.02)
+    return {
+        'box': [margin_x, margin_y, w - margin_x, h - margin_y],
+        'confidence': 0.50,
+        'method': 'fallback_full_frame',
+        'deskew_angle': 0.0,
+        'quad_points': None,
+        'status': 'fallback'
+    }
+
+
+def detect_statutory_area_gemini(
+    img_bgr: np.ndarray,
+    padding_pct: float = 0.10,
+    gemini_api_key: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Uses Google Gemini Vision to specifically locate the STATUTORY BATCH CODING panel:
+    the region containing MRP price, Batch Number, Manufacturing Date, and Expiry Date.
+
+    This is fundamentally different from generic text-density detection — it leverages
+    semantic understanding to skip nutrition tables, ingredient paragraphs, and postal
+    addresses and return a precise bounding box for the actual statutory info area.
+
+    Returns detection dict or None if Gemini is unavailable or detection fails.
+    """
+    if _http_requests is None:
+        return None
+
+    api_key = (gemini_api_key or "").strip()
+    if not api_key:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except Exception:
+            pass
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
+
+    if not api_key:
+        return None
+
+    h, w = img_bgr.shape[:2]
+
+    # Encode image as JPEG base64 (resize to max 1200px for speed)
+    max_dim = 1200
+    if max(h, w) > max_dim:
+        scale = max_dim / max(h, w)
+        small = cv2.resize(img_bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        small = img_bgr
+    _, enc = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    b64 = base64.b64encode(enc.tobytes()).decode("utf-8")
+
+    prompt = (
+        "You are an expert FMCG and pharmaceutical packaging inspection AI.\n"
+        "Find the STATUTORY BATCH CODING & PRICE PANEL bounding box.\n"
+        "This is specifically the region containing:\n"
+        "- MRP / Price (MRP Rs., incl of all taxes, unit sale price, INR)\n"
+        "- Batch Number / Lot (B. NO., LOT NO., any alphanumeric stamped code)\n"
+        "- Manufacturing Date (MFD, MFG, Date of Mfg, Pkd)\n"
+        "- Expiry / Use By / Best Before Date\n\n"
+        "DO NOT select the nutrition table, ingredients, or the manufacturer postal address block.\n"
+        "Return ONLY a JSON object with keys:\n"
+        "statutory_box_2d: [ymin, xmin, ymax, xmax] (normalized 0 to 1000, top-left is [0,0])\n"
+        "confidence: float between 0 and 1\n"
+        "fields_found: list of found fields e.g. ['mrp','batch_number','mfg_date','exp_date']\n"
+    )
+
+    # Try multiple model fallback order
+    gemini_models = [
+        "gemini-3.5-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+    ]
+
+    for model_name in gemini_models:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model_name}:generateContent?key={api_key}"
+        )
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": b64}}
+                ]
+            }],
+            "generationConfig": {
+                "temperature": 0.05,
+                "response_mime_type": "application/json"
+            }
+        }
+        try:
+            resp = _http_requests.post(url, json=payload, timeout=15)
+            if resp.status_code == 200:
+                txt = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                parsed = json.loads(txt)
+                box_norm = parsed.get("statutory_box_2d")
+                if box_norm and len(box_norm) == 4:
+                    ymin_n, xmin_n, ymax_n, xmax_n = box_norm
+                    # Convert normalized (0-1000) to pixel coordinates
+                    x1 = max(0, int(xmin_n * w / 1000.0))
+                    y1 = max(0, int(ymin_n * h / 1000.0))
+                    x2 = min(w, int(xmax_n * w / 1000.0))
+                    y2 = min(h, int(ymax_n * h / 1000.0))
+
+                    # Add safety padding
+                    bw, bh = x2 - x1, y2 - y1
+                    pad_x = max(5, int(bw * padding_pct))
+                    pad_y = max(5, int(bh * padding_pct))
+                    x1 = max(0, x1 - pad_x)
+                    y1 = max(0, y1 - pad_y)
+                    x2 = min(w, x2 + pad_x)
+                    y2 = min(h, y2 + pad_y)
+
+                    # Reject if box is degenerate (too thin/small or full frame)
+                    if (x2 - x1) < 20 or (y2 - y1) < 10:
+                        print(f"[LabelDetector] Gemini box too small ({x2-x1}x{y2-y1}), skipping.")
+                        return None
+                    if (x2 - x1) >= int(w * 0.97) and (y2 - y1) >= int(h * 0.97):
+                        # Full frame — not useful, let OpenCV handle
+                        print("[LabelDetector] Gemini returned full-frame box, falling back to OpenCV.")
+                        return None
+
+                    conf = float(parsed.get("confidence", 0.88))
+                    fields = parsed.get("fields_found", [])
+                    print(
+                        f"[LabelDetector] Gemini statutory detection: box=[{x1},{y1},{x2},{y2}], "
+                        f"conf={conf:.2f}, fields={fields}, model={model_name}"
+                    )
+                    return {
+                        'box': [x1, y1, x2, y2],
+                        'confidence': round(conf, 2),
+                        'method': 'gemini_statutory_detection',
+                        'deskew_angle': 0.0,
+                        'quad_points': None,
+                        'status': 'detected',
+                        'fields_found': fields
+                    }
+                else:
+                    print(f"[LabelDetector] Gemini ({model_name}) returned no statutory_box_2d.")
+                    return None
+            elif resp.status_code in (404, 410):
+                # Model unavailable, try next
+                continue
+            else:
+                print(f"[LabelDetector] Gemini ({model_name}) HTTP {resp.status_code}: {resp.text[:100]}")
+                return None
+        except Exception as exc:
+            print(f"[LabelDetector] Gemini statutory detection error ({model_name}): {exc}")
+            return None
+
+    return None
+
+
+def detect_information_area(
+    img_bgr: np.ndarray,
+    padding_pct: float = 0.10,
+    gemini_api_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Main detection entry point. Priority order:
+      1. Custom YOLO model (if trained weights are present).
+      2. Gemini Vision statutory area detector — semantically locates MRP/Batch/MFD/EXP zone.
+      3. OpenCV multi-scale text-density fallback.
+    """
+    yolo_model = get_yolo_model()
+    h, w = img_bgr.shape[:2]
+
+    if yolo_model is not None:
+        try:
+            results = yolo_model(img_bgr, verbose=False)
+            boxes = results[0].boxes
+            best_box = None
+            best_conf = 0.0
+            
+            for b in boxes:
+                conf = float(b.conf[0])
+                cls_id = int(b.cls[0])
+                # Accept label classes
+                if conf > best_conf and conf >= 0.30:
+                    best_conf = conf
+                    xyxy = b.xyxy[0].cpu().numpy()
+                    best_box = [int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])]
+
+            if best_box is not None:
+                # Add padding
+                bw = best_box[2] - best_box[0]
+                bh = best_box[3] - best_box[1]
+                pad_x = int(bw * padding_pct)
+                pad_y = int(bh * padding_pct)
+                x1 = max(0, best_box[0] - pad_x)
+                y1 = max(0, best_box[1] - pad_y)
+                x2 = min(w, best_box[2] + pad_x)
+                y2 = min(h, best_box[3] + pad_y)
+                return {
+                    'box': [x1, y1, x2, y2],
+                    'confidence': round(best_conf, 2),
+                    'method': 'yolo_model',
+                    'deskew_angle': 0.0,
+                    'quad_points': None,
+                    'status': 'detected'
+                }
+        except Exception as e:
+            print(f"[LabelDetector] YOLO inference error ({e}), falling back to Gemini/OpenCV")
+
+    # 2. Try Gemini Vision statutory area detection
+    gemini_result = detect_statutory_area_gemini(img_bgr, padding_pct=padding_pct, gemini_api_key=gemini_api_key)
+    if gemini_result is not None:
+        return gemini_result
+
+    # 3. Use OpenCV Intelligent Pipeline as final fallback
+    print("[LabelDetector] Gemini unavailable or failed — using OpenCV text-density fallback.")
+    return detect_label_opencv(img_bgr, padding_pct=padding_pct)
+
+
+# =============================================================================
+# Automatic Cropping & Perspective Rectification
+# =============================================================================
+def crop_and_rectify_label(
+    img_bgr: np.ndarray,
+    detection_result: Dict[str, Any]
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """
+    Crops the detected information area and applies deskewing/perspective
+    rectification if needed.
+    """
+    h, w = img_bgr.shape[:2]
+    box = detection_result.get('box', [0, 0, w, h])
+    x1, y1, x2, y2 = box
+
+    # Ensure valid coordinates
+    x1 = max(0, min(x1, w - 10))
+    y1 = max(0, min(y1, h - 10))
+    x2 = max(x1 + 10, min(x2, w))
+    y2 = max(y1 + 10, min(y2, h))
+
+    cropped = img_bgr[y1:y2, x1:x2].copy()
+
+    # Deskew if significant rotation was detected
+    angle = detection_result.get('deskew_angle', 0.0)
+    if abs(angle) >= 2.0:
+        ch, cw = cropped.shape[:2]
+        center = (cw // 2, ch // 2)
+        rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
+        cropped = cv2.warpAffine(cropped, rot_mat, (cw, ch), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+    meta = {
+        'crop_box': [int(x1), int(y1), int(x2), int(y2)],
+        'crop_width': int(x2 - x1),
+        'crop_height': int(y2 - y1),
+        'deskew_applied': abs(angle) >= 2.0,
+        'deskew_angle': angle
+    }
+    return cropped, meta
+
+
+# =============================================================================
+# Image Enhancement Pipeline for OCR
+# =============================================================================
+def enhance_cropped_label(
+    cropped_bgr: np.ndarray,
+    target_dpi_height: int = 1200
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Applies non-destructive image enhancement for dot-matrix codes,
+    inkjet dates, and pharmaceutical packaging:
+      1. Intelligent Resizing (standardizes resolution for OCR)
+      2. Bilateral Denoising (preserves sharp character edges)
+      3. CLAHE (Contrast Limited Adaptive Histogram Equalization)
+      4. Subtle Unsharp Mask Sharpening
+      
+    Returns:
+      (enhanced_color_bgr, enhanced_grayscale)
+    """
+    ch, cw = cropped_bgr.shape[:2]
+
+    # 1. Standardize resolution (optimal height ~1000-1400px)
+    scale = 1.0
+    if ch < 700:
+        scale = 700.0 / ch
+    elif ch > 1800:
+        scale = 1800.0 / ch
+
+    if abs(scale - 1.0) > 0.05:
+        target_w = int(cw * scale)
+        target_h = int(ch * scale)
+        resized_bgr = cv2.resize(cropped_bgr, (target_w, target_h), interpolation=cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA)
+    else:
+        resized_bgr = cropped_bgr.copy()
+
+    # 2. Bilateral Filter Denoising (removes sensor noise while preserving text edges)
+    denoised_bgr = cv2.bilateralFilter(resized_bgr, d=7, sigmaColor=50, sigmaSpace=50)
+
+    # 3. Grayscale conversion
+    gray = cv2.cvtColor(denoised_bgr, cv2.COLOR_BGR2GRAY)
+
+    # 4. CLAHE on L channel of LAB color space (enhances contrast without distorting colors)
+    lab = cv2.cvtColor(denoised_bgr, cv2.COLOR_BGR2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+    
+    clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
+    l_enhanced = clahe.apply(l_channel)
+    
+    lab_enhanced = cv2.merge((l_enhanced, a_channel, b_channel))
+    enhanced_color_bgr = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
+
+    # 5. Contrast-enhanced grayscale with subtle sharpening (unsharp mask)
+    gray_clahe = clahe.apply(gray)
+    gaussian_blur = cv2.GaussianBlur(gray_clahe, (0, 0), sigmaX=1.5)
+    enhanced_gray = cv2.addWeighted(gray_clahe, 1.35, gaussian_blur, -0.35, 0)
+
+    return enhanced_color_bgr, enhanced_gray
+
+
+# =============================================================================
+# Validation Engine for Extracted Product Details
+# =============================================================================
+def parse_and_normalize_date(date_str: Optional[str]) -> Tuple[Optional[datetime], Optional[str], bool]:
+    """
+    Attempts to parse date string into datetime object and normalized format.
+    Preserves partial dates like MM/YYYY or MM-YYYY without fabrication.
+    
+    Returns:
+      (datetime_obj_or_none, normalized_string_or_original, is_partial)
+    """
+    if not date_str or str(date_str).lower() in ["none", "null", "not found", "-", ""]:
+        return None, None, False
+
+    clean = re.sub(r"[^\d/\-\.]", "", str(date_str)).strip()
+    clean = re.sub(r"[\.\-]", "/", clean)
+
+    # Check for DD/MM/YYYY or YYYY/MM/DD
+    for fmt in ["%d/%m/%Y", "%Y/%m/%d", "%d/%m/%y"]:
+        try:
+            d = datetime.strptime(clean, fmt)
+            return d, d.strftime("%d/%m/%Y"), False
+        except ValueError:
+            pass
+
+    # Check for partial MM/YYYY or MM/YY
+    for fmt in ["%m/%Y", "%m/%y"]:
+        try:
+            d = datetime.strptime(clean, fmt)
+            # Normalize to 1st of month for comparison, but mark is_partial=True
+            return d, d.strftime("%m/%Y"), True
+        except ValueError:
+            pass
+
+    # Month name matching: e.g. "AUG 2026", "AUG/2026"
+    month_match = re.search(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s/\-\.]*(\d{2,4})", str(date_str), re.IGNORECASE)
+    if month_match:
+        m_str = month_match.group(1).capitalize()
+        y_str = month_match.group(2)
+        if len(y_str) == 2:
+            y_str = "20" + y_str
+        try:
+            d = datetime.strptime(f"{m_str}/{y_str}", "%b/%Y")
+            return d, d.strftime("%m/%Y"), True
+        except ValueError:
+            pass
+
+    return None, str(date_str), False
+
+
+def validate_extracted_information(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validates extracted OCR information before database persistence:
+      1. Verify date formats (DD/MM/YYYY, MM/YYYY).
+      2. Logical check: Ensure expiry date is strictly later than manufacturing date.
+      3. Preserve partial dates (e.g. MM/YYYY).
+      4. Flag low confidence or uncertain fields.
+      5. Never silently fabricate values.
+      
+    Returns:
+      Validation summary dictionary.
+    """
+    flags: List[str] = []
+    warnings: List[str] = []
+
+    mfg_raw = data.get("mfg_date")
+    exp_raw = data.get("exp_date")
+    batch_raw = data.get("batch_number")
+    mrp_raw = data.get("mrp")
+
+    mfg_dt, mfg_norm, mfg_partial = parse_and_normalize_date(mfg_raw)
+    exp_dt, exp_norm, exp_partial = parse_and_normalize_date(exp_raw)
+
+    # 1. Date order check
+    date_order_valid = True
+    if mfg_dt and exp_dt:
+        if exp_dt <= mfg_dt:
+            date_order_valid = False
+            flags.append("DATE_ORDER_ANOMALY: Expiry date is on or before manufacturing date.")
+            warnings.append("Expiry date is earlier than or equal to Mfg date. Manual review required.")
+
+    # 2. Batch Number Check
+    batch_valid = True
+    if not batch_raw or str(batch_raw).lower() in ["not found", "none", "null", ""]:
+        batch_valid = False
+        flags.append("MISSING_BATCH_NUMBER")
+    elif len(str(batch_raw)) < 3:
+        batch_valid = False
+        flags.append("SUSPICIOUS_SHORT_BATCH_NUMBER")
+        warnings.append(f"Extracted batch '{batch_raw}' is unusually short.")
+
+    # 3. Expiry Date Check
+    exp_valid = True
+    if not exp_raw or str(exp_raw).lower() in ["not found", "none", "null", ""]:
+        exp_valid = False
+        flags.append("MISSING_EXPIRY_DATE")
+
+    # 4. Overall Confidence Scoring
+    base_conf = float(data.get("confidence_score") or 0.85)
+    if not date_order_valid:
+        base_conf *= 0.60
+    if not batch_valid:
+        base_conf *= 0.75
+    if not exp_valid:
+        base_conf *= 0.80
+
+    needs_manual_review = bool(not date_order_valid or not batch_valid or base_conf < 0.70)
+
+    return {
+        "is_valid": bool(date_order_valid and batch_valid),
+        "needs_manual_review": needs_manual_review,
+        "date_order_valid": date_order_valid,
+        "mfg_normalized": mfg_norm,
+        "mfg_is_partial": mfg_partial,
+        "exp_normalized": exp_norm,
+        "exp_is_partial": exp_partial,
+        "validation_flags": flags,
+        "warnings": warnings,
+        "adjusted_confidence": round(base_conf, 2)
+    }
+

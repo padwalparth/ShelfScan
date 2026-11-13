@@ -1,0 +1,337 @@
+
+
+/* ===================================================================
+   MOBILE-FIRST RESPONSIVE OVERRIDES  v2
+   Applied ONLY on screens ≤ 768px wide (phones & small tablets).
+   Desktop layout (> 768px) is 100% untouched.
+   =================================================================== */
+
+/* ── 1. Global overflow guard ──────────────────────────────────────── */
+@media (max-width: 768px) {
+  html, body {
+    overflow-x: hidden;
+    width: 100%;
+    max-width: 100vw;
+  }
+
+  /* Every child must stay inside the viewport */
+  * {
+    box-sizing: border-box;
+    max-width: 100%;
+  }
+
+  /* Atmospheric glow orbs are way too big on phone */
+  .glow-1 { width: 280px; height: 280px; }
+  .glow-2 { width: 320px; height: 320px; }
+
+  /* ── 2. App container ───────────────────────────────────────────── */
+  .app-container {
+    padding: 10px 10px 90px 10px;
+    gap: 12px;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  /* ── 3. Header: stack brand + actions vertically ────────────────── */
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 12px 14px;
+    gap: 10px;
+    border-radius: 14px;
+  }
+
+  .header-brand {
+    width: 100%;
+    gap: 10px;
+  }
+
+  .brand-logo {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+  }
+
+  .brand-title {
+    font-size: 1rem;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .brand-subtitle {
+    display: none;    /* save vertical space */
+  }
+
+  /* Actions row: wraps, all items stay inside header */
+  .header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  /* Status pills: smaller, hide the less important ones */
+  .status-indicator-pill {
+    font-size: 0.65rem;
+    padding: 4px 8px;
+    gap: 5px;
+    white-space: nowrap;
+  }
+
+  #rpiStatusBadge,
+  #supabaseStatusBadge {
+    display: none;    /* keep only "Server Connected" pill */
+  }
+
+  /* APK download button: icon only on phone (save horizontal space) */
+  #headerDownloadApkBtn {
+    padding: 6px 10px;
+  }
+  #headerDownloadApkBtn span {
+    display: none;
+  }
+
+  /* Settings button: icon only */
+  #openSettingsBtn span {
+    display: none;
+  }
+  #openSettingsBtn {
+    padding: 6px 10px;
+  }
+
+  /* ── 4. Install banner ──────────────────────────────────────────── */
+  #mobileInstallBanner {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+    padding: 12px !important;
+    margin: 0 0 4px 0 !important;
+    border-radius: 12px !important;
+    overflow: hidden;
+  }
+
+  #mobileInstallBanner > div:first-child {
+    width: 100%;
+  }
+
+  #mobileInstallBanner > div:last-child {
+    width: 100%;
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  #mobileInstallBanner > div:last-child .btn {
+    flex: 1;
+    text-align: center;
+    justify-content: center;
+    min-width: 100px;
+  }
+
+  /* ── 5. Main layout → single column ────────────────────────────── */
+  .main-layout {
+    display: flex !important;         /* override grid entirely */
+    flex-direction: column !important;
+    gap: 12px !important;
+    width: 100%;
+  }
+
+  .main-layout > * {
+    width: 100% !important;
+    min-width: 0 !important;
+    overflow-x: hidden;
+  }
+
+  /* ── 6. Glass panels ────────────────────────────────────────────── */
+  .panel {
+    padding: 14px 12px;
+    border-radius: 14px;
+    gap: 12px;
+    overflow: hidden;
+  }
+
+  /* ── 7. Mode tabs: horizontal scroll, no wrapping ───────────────── */
+  .mode-tabs {
+    display: flex !important;
+    overflow-x: auto !important;
+    overflow-y: visible !important;
+    flex-wrap: nowrap !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 4px;
+    padding-bottom: 2px;
+  }
+
+  .mode-tabs::-webkit-scrollbar { display: none; }
+
+  .tab-btn {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    padding: 8px 12px;
+    font-size: 0.74rem;
+  }
+
+  /* ── 8. Drop zone ───────────────────────────────────────────────── */
+  .drop-zone {
+    padding: 20px 14px;
+  }
+
+  .drop-hints { display: none; }   /* hide "Ctrl+V to paste" hint */
+
+  /* ── 9. Camera ──────────────────────────────────────────────────── */
+  .camera-container {
+    height: 200px;
+    min-height: unset;
+  }
+
+  .camera-controls {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  #cameraSourceSelect { display: none !important; }
+
+  #mobileDirectPhotoBtn {
+    width: 100% !important;
+    min-height: 52px !important;
+    font-size: 1rem !important;
+    justify-content: center !important;
+    border-radius: 12px !important;
+  }
+
+  /* ── 10. Action buttons ─────────────────────────────────────────── */
+  .btn-lg {
+    padding: 11px 14px;
+    font-size: 0.85rem;
+  }
+
+  /* Full-width action buttons inside panels */
+  .input-panel .camera-controls .btn,
+  .input-panel > .btn-lg {
+    width: 100%;
+  }
+
+  /* ── 11. Results: batch field grid ─────────────────────────────── */
+  .batch-grid {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+  }
+
+  /* ── 12. Stats / cloud cards ────────────────────────────────────── */
+  .cloud-stats-grid {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+  }
+
+  .stat-card {
+    padding: 10px 10px;
+    border-radius: 10px;
+  }
+
+  .stat-card .stat-value,
+  .stat-card [class*="value"] {
+    font-size: 1.4rem;
+  }
+
+  /* ── 13. Detail tabs (result view) ─────────────────────────────── */
+  .detail-tabs-nav {
+    display: flex !important;
+    overflow-x: auto !important;
+    flex-wrap: nowrap !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .detail-tabs-nav::-webkit-scrollbar { display: none; }
+
+  .detail-tabs-nav .tab-btn {
+    flex-shrink: 0;
+  }
+
+  /* ── 14. Pipeline stepper ───────────────────────────────────────── */
+  .pipeline-stepper {
+    display: flex !important;
+    overflow-x: auto !important;
+    flex-wrap: nowrap !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 6px;
+    gap: 4px;
+  }
+
+  .pipeline-stepper::-webkit-scrollbar { display: none; }
+
+  .pipe-step {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    padding: 6px 8px;
+  }
+
+  .pipe-arrow {
+    flex-shrink: 0;
+    align-self: center;
+  }
+
+  /* ── 15. RPi info grid ──────────────────────────────────────────── */
+  .rpi-info-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* ── 16. Samples grid ───────────────────────────────────────────── */
+  .samples-grid {
+    grid-template-columns: repeat(auto-fill, minmax(85px, 1fr));
+    gap: 7px;
+  }
+
+  /* ── 17. Toast notifications ────────────────────────────────────── */
+  .toast-container {
+    left: 10px !important;
+    right: 10px !important;
+    bottom: 72px !important;
+    width: auto !important;
+  }
+
+  /* ── 18. Tables: scroll horizontally ───────────────────────────── */
+  .table-wrapper,
+  table {
+    overflow-x: auto;
+    display: block;
+    max-width: 100%;
+  }
+
+  /* ── 19. Banners strip ──────────────────────────────────────────── */
+  .banners-strip {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* ── 20. Panel-header: allow wrap ──────────────────────────────── */
+  .panel-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+/* ── Extra-small phones (< 400 px) ────────────────────────────────── */
+@media (max-width: 400px) {
+
+  .brand-title { font-size: 0.9rem; }
+
+  .tab-btn {
+    padding: 7px 10px;
+    font-size: 0.7rem;
+  }
+
+  .batch-grid {
+    grid-template-columns: 1fr !important;   /* single col on tiny phones */
+  }
+
+  .cloud-stats-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .panel { padding: 11px 10px; }
+
+  .btn-lg { font-size: 0.82rem; }
+}
+

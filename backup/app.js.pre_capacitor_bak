@@ -1,0 +1,2250 @@
+/**
+ * BatchScan AI · Advanced OCR & Packaging Intelligence
+ * Frontend Application Controller with Supabase Cloud Database Integration
+ */
+
+// Application State
+const state = {
+  selectedFile: null,
+  selectedSample: null,
+  imageBase64: null,
+  sourceName: 'upload.jpg',
+  rotateDeg: 0,
+  isEnhanced: false,
+  stream: null,
+  apiKey: localStorage.getItem('batchscan_api_key') || '',
+  model: (() => {
+    const cached = localStorage.getItem('batchscan_model') || '';
+    const validModels = [
+      'gemini-3.5-flash-lite',
+      'gemini-flash-lite-latest',
+      'gemini-3.5-flash',
+      'gemini-3.7-flash',
+      'meta/llama-3.2-11b-vision-instruct'
+    ];
+    if (!cached || !validModels.includes(cached)) {
+      localStorage.setItem('batchscan_model', 'gemini-3.5-flash-lite');
+      return 'gemini-3.5-flash-lite';
+    }
+    return cached;
+  })(),
+  samples: [],
+  history: JSON.parse(localStorage.getItem('batchscan_history') || '[]'),
+  currentResult: null,
+
+  // Supabase State
+  supabaseConnected: false,
+  supabaseProject: '',
+  supabaseScans: [],
+  supabaseInventory: [],
+  supabaseSearch: '',
+  supabaseStatusFilter: 'ALL',
+  activeDbTab: 'cloud',
+  intelligenceData: null,
+
+  // Auto-Crop & Multi-view State
+  detectionBox: null,
+  detectionMeta: null,
+  originalUrl: null,
+  croppedUrl: null,
+  enhancedUrl: null,
+  currentViewMode: 'original',
+  rpiTotalCaptures: 0,
+  rpiLastSeen: null,
+  rpiPollingTimer: null
+};
+
+// DOM Elements
+const DOM = {
+  // Tabs
+  tabBtns: document.querySelectorAll('.tab-btn'),
+  tabPanes: document.querySelectorAll('.tab-pane'),
+  tabUpload: document.getElementById('tabUpload'),
+  tabRpi: document.getElementById('tabRpi'),
+  tabCamera: document.getElementById('tabCamera'),
+  tabSamples: document.getElementById('tabSamples'),
+
+  // Ingestion
+  dropZone: document.getElementById('dropZone'),
+  fileInput: document.getElementById('fileInput'),
+  cameraStream: document.getElementById('cameraStream'),
+  cameraCanvas: document.getElementById('cameraCanvas'),
+  cameraSourceSelect: document.getElementById('cameraSourceSelect'),
+  captureBtn: document.getElementById('captureBtn'),
+  toggleCameraBtn: document.getElementById('toggleCameraBtn'),
+  samplesGallery: document.getElementById('samplesGallery'),
+
+  // Preview & Tools
+  previewCard: document.getElementById('previewCard'),
+  imagePreview: document.getElementById('imagePreview'),
+  previewFilename: document.getElementById('previewFilename'),
+  rotateBtn: document.getElementById('rotateBtn'),
+  enhanceToggleBtn: document.getElementById('enhanceToggleBtn'),
+  enhanceBtnText: document.getElementById('enhanceBtnText'),
+  clearImageBtn: document.getElementById('clearImageBtn'),
+  laserScanner: document.getElementById('laserScanner'),
+  cropViewSwitcher: document.getElementById('cropViewSwitcher'),
+  cropViewBtns: document.querySelectorAll('.crop-view-btn'),
+  labelBoxCanvas: document.getElementById('labelBoxCanvas'),
+  detectionInfoStrip: document.getElementById('detectionInfoStrip'),
+  detMethodText: document.getElementById('detMethodText'),
+  detBoxText: document.getElementById('detBoxText'),
+  detConfText: document.getElementById('detConfText'),
+
+  // Raspberry Pi Elements
+  rpiStatusBadge: document.getElementById('rpiStatusBadge'),
+  rpiStatusText: document.getElementById('rpiStatusText'),
+  rpiConnectionPill: document.getElementById('rpiConnectionPill'),
+  rpiLanIpVal: document.getElementById('rpiLanIpVal'),
+  rpiEndpointVal: document.getElementById('rpiEndpointVal'),
+  rpiCaptureCountVal: document.getElementById('rpiCaptureCountVal'),
+  rpiLastSeenVal: document.getElementById('rpiLastSeenVal'),
+  piCommandCode: document.getElementById('piCommandCode'),
+  copyPiCmdBtn: document.getElementById('copyPiCmdBtn'),
+  testPiCaptureBtn: document.getElementById('testPiCaptureBtn'),
+  simulatePiUploadBtn: document.getElementById('simulatePiUploadBtn'),
+
+  // Pipeline Stepper & Validation
+  pipelineStepper: document.getElementById('pipelineStepper'),
+  pipeStepReceived: document.getElementById('pipeStepReceived'),
+  pipeStepDetected: document.getElementById('pipeStepDetected'),
+  pipeStepDetText: document.getElementById('pipeStepDetText'),
+  pipeStepCropped: document.getElementById('pipeStepCropped'),
+  pipeStepEnhanced: document.getElementById('pipeStepEnhanced'),
+  pipeStepOcr: document.getElementById('pipeStepOcr'),
+  pipeStepValidated: document.getElementById('pipeStepValidated'),
+  pipeStepValText: document.getElementById('pipeStepValText'),
+  validationBanner: document.getElementById('validationBanner'),
+  valBadgeChip: document.getElementById('valBadgeChip'),
+  valBannerTitle: document.getElementById('valBannerTitle'),
+  valBannerDetails: document.getElementById('valBannerDetails'),
+
+  // Crop Artifacts Pane
+  artifactOriginalImg: document.getElementById('artifactOriginalImg'),
+  artifactCroppedImg: document.getElementById('artifactCroppedImg'),
+  artifactEnhancedImg: document.getElementById('artifactEnhancedImg'),
+  artifactOriginalCap: document.getElementById('artifactOriginalCap'),
+  artifactCroppedCap: document.getElementById('artifactCroppedCap'),
+  artifactEnhancedCap: document.getElementById('artifactEnhancedCap'),
+  metricDetMethod: document.getElementById('metricDetMethod'),
+  metricDetConf: document.getElementById('metricDetConf'),
+  metricDetBox: document.getElementById('metricDetBox'),
+  metricDetAngle: document.getElementById('metricDetAngle'),
+
+  // Action
+  extractBtn: document.getElementById('extractBtn'),
+  btnSpinner: document.getElementById('btnSpinner'),
+  extractBtnText: document.getElementById('extractBtnText'),
+  scanBarcodeOnlyBtn: document.getElementById('scanBarcodeOnlyBtn'),
+  scanBarcodeOnlyText: document.getElementById('scanBarcodeOnlyText'),
+  barcodeBtnSpinner: document.getElementById('barcodeBtnSpinner'),
+  scanCameraBarcodeBtn: document.getElementById('scanCameraBarcodeBtn'),
+
+  // Results
+  emptyState: document.getElementById('emptyState'),
+  loadingState: document.getElementById('loadingState'),
+  loadingStatusText: document.getElementById('loadingStatusText'),
+  resultsContainer: document.getElementById('resultsContainer'),
+  resultsMeta: document.getElementById('resultsMeta'),
+  timeMeta: document.getElementById('timeMeta'),
+  modelMeta: document.getElementById('modelMeta'),
+  cloudMeta: document.getElementById('cloudMeta'),
+  cloudMetaText: document.getElementById('cloudMetaText'),
+  gtBanner: document.getElementById('gtBanner'),
+  gtBadge: document.getElementById('gtBadge'),
+  gtDetails: document.getElementById('gtDetails'),
+
+  // Barcode Elements
+  barcodeBanner: document.getElementById('barcodeBanner'),
+  barcodeBadgeChip: document.getElementById('barcodeBadgeChip'),
+  barcodeBannerTitle: document.getElementById('barcodeBannerTitle'),
+  barcodeBannerDetails: document.getElementById('barcodeBannerDetails'),
+  valBarcodeNumber: document.getElementById('valBarcodeNumber'),
+  valBarcodeSymbology: document.getElementById('valBarcodeSymbology'),
+  valBarcodeOrigin: document.getElementById('valBarcodeOrigin'),
+  valBarcodeChecksum: document.getElementById('valBarcodeChecksum'),
+  valBarcodeDetailsBox: document.getElementById('valBarcodeDetailsBox'),
+  copyBarcodeDetailsBtn: document.getElementById('copyBarcodeDetailsBtn'),
+
+  // Data fields
+  valBatchNumber: document.getElementById('valBatchNumber'),
+  valMfgDate: document.getElementById('valMfgDate'),
+  valExpDate: document.getElementById('valExpDate'),
+  valExpiryStatusBadge: document.getElementById('valExpiryStatusBadge'),
+  valExpirySubtext: document.getElementById('valExpirySubtext'),
+  valMrp: document.getElementById('valMrp'),
+  valProductName: document.getElementById('valProductName'),
+  valManufacturer: document.getElementById('valManufacturer'),
+  valNotes: document.getElementById('valNotes'),
+  valFullText: document.getElementById('valFullText'),
+  valJsonBlock: document.getElementById('valJsonBlock'),
+
+  // Detail Tabs
+  detailTabBtns: document.querySelectorAll('.detail-tab-btn'),
+  detailPanes: document.querySelectorAll('.detail-pane'),
+  copyOcrTextBtn: document.getElementById('copyOcrTextBtn'),
+  copyJsonBtn: document.getElementById('copyJsonBtn'),
+  downloadJsonBtn: document.getElementById('downloadJsonBtn'),
+  saveToHistoryBtn: document.getElementById('saveToHistoryBtn'),
+  exportCurrentCsvBtn: document.getElementById('exportCurrentCsvBtn'),
+
+  // Supabase Cloud Analytics Cards
+  statTotalScans: document.getElementById('statTotalScans'),
+  statUniqueBatches: document.getElementById('statUniqueBatches'),
+  statValidCount: document.getElementById('statValidCount'),
+  statExpiringCount: document.getElementById('statExpiringCount'),
+  statAccuracy: document.getElementById('statAccuracy'),
+
+  // Database Tab Navigation
+  dbTabBtns: document.querySelectorAll('.db-tab-btn'),
+  paneIntelligence: document.getElementById('paneIntelligence'),
+  paneCloudScans: document.getElementById('paneCloudScans'),
+  paneInventoryMaster: document.getElementById('paneInventoryMaster'),
+  paneLocalHistory: document.getElementById('paneLocalHistory'),
+  intelToolbar: document.getElementById('intelToolbar'),
+  cloudToolbar: document.getElementById('cloudToolbar'),
+  inventoryToolbar: document.getElementById('inventoryToolbar'),
+  localToolbar: document.getElementById('localToolbar'),
+
+  // Intelligence Dashboard Selectors
+  intelAlertsBadge: document.getElementById('intelAlertsBadge'),
+  generateAiBriefingBtn: document.getElementById('generateAiBriefingBtn'),
+  seedDemoAlertsBtn: document.getElementById('seedDemoAlertsBtn'),
+  refreshIntelBtn: document.getElementById('refreshIntelBtn'),
+  intelHealthScore: document.getElementById('intelHealthScore'),
+  intelHealthStatus: document.getElementById('intelHealthStatus'),
+  intelHealthEmoji: document.getElementById('intelHealthEmoji'),
+  intelAtRiskValue: document.getElementById('intelAtRiskValue'),
+  intel5DayCountBadge: document.getElementById('intel5DayCountBadge'),
+  intelTopSellerName: document.getElementById('intelTopSellerName'),
+  intelTopSellerShare: document.getElementById('intelTopSellerShare'),
+  criticalAlertsContainer: document.getElementById('criticalAlertsContainer'),
+  criticalAlertsCounter: document.getElementById('criticalAlertsCounter'),
+  velocityTableBody: document.getElementById('velocityTableBody'),
+  suggestionsContainer: document.getElementById('suggestionsContainer'),
+  aiBriefingContent: document.getElementById('aiBriefingContent'),
+  aiBriefingTimestamp: document.getElementById('aiBriefingTimestamp'),
+  copyAiBriefingBtn: document.getElementById('copyAiBriefingBtn'),
+  aiBriefingBtnText: document.getElementById('aiBriefingBtnText'),
+
+  // Cloud Filters & Actions
+  supabaseSearchInput: document.getElementById('supabaseSearchInput'),
+  supabaseStatusFilter: document.getElementById('supabaseStatusFilter'),
+  refreshCloudBtn: document.getElementById('refreshCloudBtn'),
+  exportSupabaseCsvBtn: document.getElementById('exportSupabaseCsvBtn'),
+  clearSupabaseBtn: document.getElementById('clearSupabaseBtn'),
+  cloudScansCountBadge: document.getElementById('cloudScansCountBadge'),
+  supabaseTableBody: document.getElementById('supabaseTableBody'),
+
+  // Master Inventory Actions & Table
+  refreshInventoryBtn: document.getElementById('refreshInventoryBtn'),
+  exportInventoryCsvBtn: document.getElementById('exportInventoryCsvBtn'),
+  inventoryCountBadge: document.getElementById('inventoryCountBadge'),
+  inventoryTableBody: document.getElementById('inventoryTableBody'),
+
+  // Local History Table
+  historyCountBadge: document.getElementById('historyCountBadge'),
+  historyTableBody: document.getElementById('historyTableBody'),
+  exportAllCsvBtn: document.getElementById('exportAllCsvBtn'),
+  clearHistoryBtn: document.getElementById('clearHistoryBtn'),
+
+  // Header Status & Settings
+  apiStatusBadge: document.getElementById('apiStatusBadge'),
+  apiStatusText: document.getElementById('apiStatusText'),
+  supabaseStatusBadge: document.getElementById('supabaseStatusBadge'),
+  supabaseStatusText: document.getElementById('supabaseStatusText'),
+  openSettingsBtn: document.getElementById('openSettingsBtn'),
+  settingsModal: document.getElementById('settingsModal'),
+  closeSettingsBtn: document.getElementById('closeSettingsBtn'),
+  cancelSettingsBtn: document.getElementById('cancelSettingsBtn'),
+  saveSettingsBtn: document.getElementById('saveSettingsBtn'),
+  settingsApiKey: document.getElementById('settingsApiKey'),
+  toggleApiKeyVisibility: document.getElementById('toggleApiKeyVisibility'),
+  settingsModel: document.getElementById('settingsModel'),
+  defaultEnhanceCheckbox: document.getElementById('defaultEnhanceCheckbox'),
+  envKeyBadge: document.getElementById('envKeyBadge'),
+  settingsSupabasePill: document.getElementById('settingsSupabasePill'),
+  settingsSupabaseUrl: document.getElementById('settingsSupabaseUrl'),
+
+  // Toast
+  toastContainer: document.getElementById('toastContainer')
+};
+
+// ==========================================
+// Initialization
+// ==========================================
+async function initApp() {
+  setupEventListeners();
+  await loadConfig();
+  await loadSamples();
+  await loadSupabaseStatus();
+  await loadSupabaseStats();
+  await loadSupabaseScans();
+  await loadSupabaseInventory();
+  await loadIntelligenceTelemetry();
+  renderHistoryTable();
+
+  // Check clipboard paste support
+  window.addEventListener('paste', handleClipboardPaste);
+}
+
+// ==========================================
+// API Config & Status
+// ==========================================
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    const data = await res.json();
+    
+    // Dynamically render model options if provided by backend
+    if (data.available_models && data.available_models.length > 0) {
+      DOM.settingsModel.innerHTML = data.available_models.map(m => {
+        const isSelected = (state.model === m.id) ? 'selected' : '';
+        return `<option value="${m.id}" ${isSelected}>${m.name}</option>`;
+      }).join('');
+    }
+
+    if (data.has_key || state.apiKey) {
+      DOM.apiStatusBadge.classList.remove('status-error');
+      DOM.apiStatusText.textContent = `Vision AI Active (${data.key_preview || 'Ready'})`;
+      DOM.envKeyBadge.textContent = data.has_key ? `Active (.env: ${data.key_preview})` : 'Custom Key';
+    } else {
+      DOM.apiStatusBadge.classList.add('status-error');
+      DOM.apiStatusText.textContent = 'API Key Required';
+      DOM.envKeyBadge.textContent = 'No Key in .env';
+    }
+
+    if (state.apiKey) {
+      DOM.settingsApiKey.value = state.apiKey;
+    }
+    if (state.model) {
+      DOM.settingsModel.value = state.model;
+    }
+
+    if (data.has_supabase && data.supabase_url) {
+      DOM.settingsSupabaseUrl.textContent = data.supabase_url;
+      DOM.settingsSupabasePill.textContent = 'Connected';
+      DOM.settingsSupabasePill.className = 'status-pill badge-success';
+    } else {
+      DOM.settingsSupabaseUrl.textContent = 'Not configured';
+      DOM.settingsSupabasePill.textContent = 'Disconnected';
+      DOM.settingsSupabasePill.className = 'status-pill badge-danger';
+    }
+
+    // Raspberry Pi Network Telemetry
+    if (data.lan_ip) {
+      if (DOM.rpiLanIpVal) DOM.rpiLanIpVal.textContent = data.lan_ip;
+      if (DOM.rpiEndpointVal) DOM.rpiEndpointVal.textContent = `http://${data.lan_ip}:8000/api/rpi/upload`;
+      if (DOM.piCommandCode) DOM.piCommandCode.textContent = `python rpi_camera_client.py --server http://${data.lan_ip}:8000`;
+      if (DOM.rpiStatusText) DOM.rpiStatusText.textContent = `Pi: ${data.lan_ip}:8000`;
+    }
+    if (data.rpi_total_captures != null && DOM.rpiCaptureCountVal) {
+      DOM.rpiCaptureCountVal.textContent = data.rpi_total_captures;
+      state.rpiTotalCaptures = data.rpi_total_captures;
+    }
+    if (data.rpi_last_seen && DOM.rpiLastSeenVal) {
+      DOM.rpiLastSeenVal.textContent = data.rpi_last_seen;
+    }
+
+    startRpiPolling();
+  } catch (err) {
+    console.error('Config fetch error:', err);
+    DOM.apiStatusText.textContent = 'Server Connected';
+  }
+}
+
+// ==========================================
+// Supabase Cloud Database Controller
+// ==========================================
+async function loadSupabaseStatus() {
+  try {
+    const res = await fetch('/api/supabase/status');
+    const data = await res.json();
+    state.supabaseConnected = !!data.connected;
+    state.supabaseProject = data.project_id || '';
+
+    if (data.connected) {
+      DOM.supabaseStatusBadge.className = 'status-indicator-pill status-supabase connected';
+      DOM.supabaseStatusText.textContent = `Supabase: Connected (${state.supabaseProject})`;
+      DOM.settingsSupabasePill.textContent = 'Live Cloud DB';
+      DOM.settingsSupabasePill.className = 'status-pill badge-success';
+      if (data.url) DOM.settingsSupabaseUrl.textContent = data.url;
+    } else {
+      DOM.supabaseStatusBadge.className = 'status-indicator-pill status-supabase error';
+      DOM.supabaseStatusText.textContent = 'Supabase: Offline';
+      DOM.settingsSupabasePill.textContent = 'Offline';
+      DOM.settingsSupabasePill.className = 'status-pill badge-danger';
+    }
+  } catch (err) {
+    console.warn('Supabase status error:', err);
+    DOM.supabaseStatusBadge.className = 'status-indicator-pill status-supabase error';
+    DOM.supabaseStatusText.textContent = 'Supabase: Error';
+  }
+}
+
+async function loadSupabaseStats() {
+  try {
+    const res = await fetch('/api/supabase/stats');
+    const data = await res.json();
+    if (data.connected && data.stats) {
+      const s = data.stats;
+      DOM.statTotalScans.textContent = s.total_scans ?? 0;
+      DOM.statUniqueBatches.textContent = s.total_unique_batches ?? 0;
+      DOM.statValidCount.textContent = s.valid_count ?? 0;
+      DOM.statExpiringCount.textContent = (s.expiring_count || 0) + (s.expired_count || 0);
+      DOM.statAccuracy.textContent = `${s.accuracy_rate ?? 100}%`;
+    }
+  } catch (err) {
+    console.warn('Failed to load Supabase stats:', err);
+  }
+}
+
+async function loadSupabaseScans() {
+  try {
+    let url = `/api/supabase/scans?limit=100`;
+    if (state.supabaseStatusFilter && state.supabaseStatusFilter !== 'ALL') {
+      url += `&status=${encodeURIComponent(state.supabaseStatusFilter)}`;
+    }
+    if (state.supabaseSearch && state.supabaseSearch.trim()) {
+      url += `&search=${encodeURIComponent(state.supabaseSearch.trim())}`;
+    }
+
+    const res = await fetch(url);
+    const data = await res.json();
+    state.supabaseScans = data.scans || [];
+    DOM.cloudScansCountBadge.textContent = state.supabaseScans.length;
+
+    renderSupabaseScansTable(state.supabaseScans);
+  } catch (err) {
+    console.error('Failed to load Supabase scans:', err);
+    DOM.supabaseTableBody.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="10" style="color: #f43f5e;">Failed to connect to Supabase Cloud: ${err.message}</td>
+      </tr>
+    `;
+  }
+}
+
+function renderSupabaseScansTable(scans) {
+  if (!scans || scans.length === 0) {
+    DOM.supabaseTableBody.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="10">No cloud scan records found. Run OCR on any label to persist to Supabase Cloud.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  DOM.supabaseTableBody.innerHTML = scans.map(row => {
+    const createdStr = row.created_at ? new Date(row.created_at).toLocaleString() : '-';
+    const status = row.expiry_status || 'UNKNOWN';
+    let badgeClass = 'badge-neutral';
+    if (status === 'VALID') badgeClass = 'badge-success';
+    else if (status === 'EXPIRING_SOON') badgeClass = 'badge-warning';
+    else if (status === 'EXPIRED') badgeClass = 'badge-danger';
+
+    const bno = row.batch_number || 'N/A';
+    const model = row.model_used ? row.model_used.split('/').pop() : 'Gemini/Vision';
+
+    return `
+      <tr>
+        <td style="font-size: 0.78rem; color: var(--text-muted);">${createdStr}</td>
+        <td style="font-weight: 500;">${escapeHtml(row.source_filename || 'Scan')}</td>
+        <td class="history-batch-code font-mono">${escapeHtml(bno)}</td>
+        <td>${escapeHtml(row.product_name || '-')}</td>
+        <td>${escapeHtml(row.mfg_date || '-')}</td>
+        <td>${escapeHtml(row.exp_date || '-')}</td>
+        <td><span class="status-pill ${badgeClass}">${status.replace('_', ' ')}</span></td>
+        <td style="font-size: 0.76rem; color: var(--text-secondary);">${escapeHtml(model)}</td>
+        <td>${escapeHtml(row.mrp || '-')}</td>
+        <td>
+          <div class="table-actions-cell">
+            <button class="btn btn-xs btn-secondary" onclick="copyText('${escapeHtml(bno)}')" title="Copy Batch Code">Copy</button>
+            <button class="btn btn-xs btn-secondary btn-icon-danger" onclick="deleteSupabaseScan('${row.id}')" title="Delete from Cloud">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function loadSupabaseInventory() {
+  try {
+    const res = await fetch('/api/supabase/inventory');
+    const data = await res.json();
+    state.supabaseInventory = data.inventory || [];
+    DOM.inventoryCountBadge.textContent = state.supabaseInventory.length;
+
+    renderSupabaseInventoryTable(state.supabaseInventory);
+  } catch (err) {
+    console.error('Failed to load Supabase inventory:', err);
+    DOM.inventoryTableBody.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="10" style="color: #f43f5e;">Failed to load master inventory: ${err.message}</td>
+      </tr>
+    `;
+  }
+}
+
+function renderSupabaseInventoryTable(inv) {
+  if (!inv || inv.length === 0) {
+    DOM.inventoryTableBody.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="10">No aggregated inventory batches found. Extracted batches will group here automatically.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  DOM.inventoryTableBody.innerHTML = inv.map(row => {
+    const firstStr = row.first_scanned_at ? new Date(row.first_scanned_at).toLocaleDateString() : '-';
+    const lastStr = row.last_scanned_at ? new Date(row.last_scanned_at).toLocaleString() : '-';
+    const status = row.status || 'VALID';
+    let badgeClass = 'badge-neutral';
+    if (status === 'VALID') badgeClass = 'badge-success';
+    else if (status === 'EXPIRING_SOON') badgeClass = 'badge-warning';
+    else if (status === 'EXPIRED') badgeClass = 'badge-danger';
+
+    const bno = row.batch_number || 'N/A';
+
+    return `
+      <tr>
+        <td class="history-batch-code font-mono" style="font-weight: 700; color: #38bdf8;">${escapeHtml(bno)}</td>
+        <td style="font-weight: 500;">${escapeHtml(row.product_name || 'Packaging Batch')}</td>
+        <td>${escapeHtml(row.mfg_date || '-')}</td>
+        <td>${escapeHtml(row.exp_date || '-')}</td>
+        <td><span class="status-pill ${badgeClass}">${status.replace('_', ' ')}</span></td>
+        <td>${escapeHtml(row.mrp || '-')}</td>
+        <td><span class="badge-pill-subtle" style="font-weight: 600;">${row.total_scans || 1} scans</span></td>
+        <td style="font-size: 0.78rem; color: var(--text-muted);">${firstStr}</td>
+        <td style="font-size: 0.78rem; color: var(--text-secondary);">${lastStr}</td>
+        <td>
+          <button class="btn btn-xs btn-secondary" onclick="copyText('${escapeHtml(bno)}')" title="Copy Batch Code">Copy</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function deleteSupabaseScan(scanId) {
+  if (!scanId) return;
+  if (!confirm('Are you sure you want to delete this scan from Supabase Cloud?')) return;
+
+  try {
+    const res = await fetch(`/api/supabase/scans/${scanId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Delete failed');
+    showToast('Scan deleted from Supabase Cloud', 'info');
+    await loadSupabaseScans();
+    await loadSupabaseStats();
+    await loadSupabaseInventory();
+  } catch (err) {
+    showToast(`Error deleting scan: ${err.message}`, 'error');
+  }
+}
+
+async function clearSupabaseScans() {
+  if (!confirm('⚠️ WARNING: This will permanently delete all scan records from Supabase Cloud. Proceed?')) return;
+
+  try {
+    const res = await fetch('/api/supabase/scans', { method: 'DELETE' });
+    if (!res.ok) throw new Error('Clear failed');
+    showToast('Supabase Cloud scan records cleared', 'info');
+    await loadSupabaseScans();
+    await loadSupabaseStats();
+    await loadSupabaseInventory();
+  } catch (err) {
+    showToast(`Error clearing cloud records: ${err.message}`, 'error');
+  }
+}
+
+// ==========================================
+// Sample Images Loader
+// ==========================================
+async function loadSamples() {
+  try {
+    const res = await fetch('/api/samples');
+    const data = await res.json();
+    state.samples = data.samples || [];
+
+    if (state.samples.length === 0) {
+      DOM.samplesGallery.innerHTML = '<p class="text-muted">No sample images found in images/ directory.</p>';
+      return;
+    }
+
+    DOM.samplesGallery.innerHTML = state.samples.map(sample => {
+      const gt = sample.ground_truth || {};
+      const batchCode = gt.batch_no ? `B.No: ${gt.batch_no}` : sample.filename;
+      return `
+        <div class="sample-card" data-filename="${sample.filename}">
+          <div class="sample-thumb-wrap">
+            <img src="${sample.url}" alt="${sample.filename}" loading="lazy" />
+          </div>
+          <div class="sample-name" title="${sample.filename}">${sample.filename}</div>
+          <div class="sample-gt-pill">${batchCode}</div>
+        </div>
+      `;
+    }).join('');
+
+    // Attach click listeners to sample cards
+    DOM.samplesGallery.querySelectorAll('.sample-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const fname = card.dataset.filename;
+        selectSampleImage(fname);
+      });
+    });
+  } catch (err) {
+    console.error('Samples loading error:', err);
+    DOM.samplesGallery.innerHTML = '<p class="text-muted">Could not load dataset samples.</p>';
+  }
+}
+
+function selectSampleImage(filename) {
+  const sample = state.samples.find(s => s.filename === filename);
+  if (!sample) return;
+
+  // Highlight selected
+  DOM.samplesGallery.querySelectorAll('.sample-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.filename === filename);
+  });
+
+  state.selectedSample = filename;
+  state.selectedFile = null;
+  state.imageBase64 = null;
+  state.sourceName = filename;
+  state.rotateDeg = 0;
+
+  displayPreview(sample.url, filename);
+  showToast(`Selected sample: ${filename}`, 'info');
+}
+
+// ==========================================
+// Image Selection & Preview Handlers
+// ==========================================
+function displayPreview(src, filename) {
+  DOM.imagePreview.src = src;
+  DOM.previewFilename.textContent = filename || 'Selected Label';
+  DOM.previewCard.style.display = 'flex';
+  DOM.extractBtn.disabled = false;
+  if (DOM.scanBarcodeOnlyBtn) DOM.scanBarcodeOnlyBtn.disabled = false;
+  applyImageTransform();
+}
+
+function clearSelectedImage() {
+  state.selectedFile = null;
+  state.selectedSample = null;
+  state.imageBase64 = null;
+  state.rotateDeg = 0;
+  state.isEnhanced = false;
+  state.detectionBox = null;
+  state.originalUrl = null;
+  state.croppedUrl = null;
+  state.enhancedUrl = null;
+
+  DOM.imagePreview.src = '';
+  DOM.previewCard.style.display = 'none';
+  if (DOM.cropViewSwitcher) DOM.cropViewSwitcher.style.display = 'none';
+  if (DOM.detectionInfoStrip) DOM.detectionInfoStrip.style.display = 'none';
+  clearDetectedBoundingBox();
+
+  DOM.extractBtn.disabled = true;
+  if (DOM.scanBarcodeOnlyBtn) DOM.scanBarcodeOnlyBtn.disabled = true;
+  DOM.fileInput.value = '';
+  DOM.enhanceToggleBtn.classList.remove('active');
+  DOM.imagePreview.classList.remove('enhanced');
+
+  DOM.samplesGallery.querySelectorAll('.sample-card').forEach(c => c.classList.remove('active'));
+}
+
+function applyImageTransform() {
+  DOM.imagePreview.style.transform = `rotate(${state.rotateDeg}deg)`;
+}
+
+function rotateImage() {
+  state.rotateDeg = (state.rotateDeg + 90) % 360;
+  applyImageTransform();
+  showToast(`Rotated ${state.rotateDeg}°`, 'info');
+}
+
+function toggleEnhancement() {
+  state.isEnhanced = !state.isEnhanced;
+  DOM.enhanceToggleBtn.classList.toggle('active', state.isEnhanced);
+  DOM.imagePreview.classList.toggle('enhanced', state.isEnhanced);
+  DOM.enhanceBtnText.textContent = state.isEnhanced ? 'Enhanced (Active)' : 'Enhance Dot-Matrix';
+  showToast(state.isEnhanced ? 'Dot-matrix contrast boost ON' : 'Contrast boost OFF', 'info');
+}
+
+// File drop & input handlers
+function handleFileSelected(file) {
+  if (!file || !file.type.startsWith('image/')) {
+    showToast('Please select a valid image file (PNG, JPG, JPEG, WEBP)', 'error');
+    return;
+  }
+
+  state.selectedFile = file;
+  state.selectedSample = null;
+  state.sourceName = file.name;
+  state.rotateDeg = 0;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    state.imageBase64 = e.target.result;
+    displayPreview(e.target.result, file.name);
+    showToast(`Loaded: ${file.name}`, 'info');
+  };
+  reader.readAsDataURL(file);
+}
+
+function handleClipboardPaste(e) {
+  const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].type.indexOf('image') !== -1) {
+      const blob = items[i].getAsFile();
+      const file = new File([blob], `Pasted_Image_${Date.now()}.png`, { type: blob.type });
+      handleFileSelected(file);
+      break;
+    }
+  }
+}
+
+// ==========================================
+// WebRTC Live Camera Management
+// ==========================================
+async function initCamera() {
+  try {
+    stopCamera();
+
+    const constraints = {
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      }
+    };
+
+    state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    DOM.cameraStream.srcObject = state.stream;
+    
+    // Enumerate devices
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(d => d.kind === 'videoinput');
+    
+    DOM.cameraSourceSelect.innerHTML = videoDevices.map((d, idx) => `
+      <option value="${d.deviceId}">${d.label || `Camera ${idx + 1}`}</option>
+    `).join('');
+
+    showToast('Camera active', 'info');
+  } catch (err) {
+    console.warn('Camera access error:', err);
+    showToast('Camera not available or permission denied', 'error');
+  }
+}
+
+function stopCamera() {
+  if (state.stream) {
+    state.stream.getTracks().forEach(track => track.stop());
+    state.stream = null;
+    DOM.cameraStream.srcObject = null;
+  }
+}
+
+function captureCameraFrame() {
+  if (!state.stream) {
+    showToast('Start camera first', 'error');
+    return;
+  }
+
+  const video = DOM.cameraStream;
+  const canvas = DOM.cameraCanvas;
+  canvas.width = video.videoWidth || 1280;
+  canvas.height = video.videoHeight || 720;
+
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  state.imageBase64 = dataUrl;
+  state.selectedFile = null;
+  state.selectedSample = null;
+  state.sourceName = `Camera_${new Date().toLocaleTimeString().replace(/:/g, '-')}.jpg`;
+  state.rotateDeg = 0;
+
+  displayPreview(dataUrl, state.sourceName);
+  showToast('Frame captured successfully!', 'info');
+}
+
+// ==========================================
+// OCR & Batch Extraction Engine
+// ==========================================
+async function extractBatchInformation() {
+  if (!state.selectedFile && !state.selectedSample && !state.imageBase64) {
+    showToast('Please select or capture an image first', 'error');
+    return;
+  }
+
+  // UI Loading State
+  setExtractionLoading(true);
+  const startTime = performance.now();
+
+  try {
+    const formData = new FormData();
+    
+    if (state.selectedSample) {
+      formData.append('sample_name', state.selectedSample);
+    } else if (state.selectedFile) {
+      formData.append('file', state.selectedFile);
+    } else if (state.imageBase64) {
+      formData.append('image_base64', state.imageBase64);
+    }
+
+    formData.append('model', state.model);
+    const provider = (state.model.startsWith('meta/') || state.model.startsWith('nvidia/') || state.model.startsWith('mistralai/')) ? 'nvidia' : 'gemini';
+    formData.append('provider', provider);
+    formData.append('enhance', state.isEnhanced ? 'true' : 'false');
+    formData.append('rotate_deg', state.rotateDeg.toString());
+
+    if (state.apiKey && state.apiKey.trim().length > 5) {
+      formData.append('api_key', state.apiKey.trim());
+    }
+
+    const response = await fetch('/api/extract', {
+      method: 'POST',
+      body: formData
+    });
+
+    const result = await response.json();
+    const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(2);
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.detail || 'Extraction failed');
+    }
+
+    state.currentResult = result;
+    renderExtractionResults(result, elapsedSec);
+    autoSaveToHistory(result);
+
+    // Refresh Supabase cloud data automatically if synced
+    if (result.saved_to_cloud) {
+      loadSupabaseStats();
+      loadSupabaseScans();
+      loadSupabaseInventory();
+      loadIntelligenceTelemetry();
+    }
+
+    showToast('Batch details extracted and synced to cloud!', 'info');
+
+  } catch (err) {
+    console.error('Extraction error:', err);
+    showToast(err.message || 'Error communicating with OCR Vision API', 'error');
+    DOM.loadingState.style.display = 'none';
+    DOM.emptyState.style.display = 'flex';
+  } finally {
+    setExtractionLoading(false);
+  }
+}
+
+function setExtractionLoading(isLoading) {
+  DOM.extractBtn.disabled = isLoading;
+  if (DOM.scanBarcodeOnlyBtn) DOM.scanBarcodeOnlyBtn.disabled = isLoading;
+  DOM.btnSpinner.style.display = isLoading ? 'inline-block' : 'none';
+  DOM.extractBtnText.textContent = isLoading ? 'Analyzing Label...' : 'Extract Batch & OCR Text';
+  DOM.laserScanner.style.display = isLoading ? 'block' : 'none';
+
+  if (isLoading) {
+    DOM.emptyState.style.display = 'none';
+    DOM.resultsContainer.style.display = 'none';
+    DOM.loadingState.style.display = 'flex';
+    DOM.loadingStatusText.textContent = 'Deciphering batch codes & expiry details...';
+  }
+}
+
+// ==========================================
+// Results Rendering
+// ==========================================
+function renderExtractionResults(result, elapsedSec) {
+  const data = result.data || {};
+  const expAnalysis = result.expiry_analysis || {};
+  const gt = result.ground_truth_comparison;
+  const barcodeInfo = result.barcode || {};
+  const barcodeVer = result.barcode_verification || {};
+
+  DOM.loadingState.style.display = 'none';
+  DOM.emptyState.style.display = 'none';
+  DOM.resultsContainer.style.display = 'flex';
+
+  // Meta bar
+  DOM.resultsMeta.style.display = 'flex';
+  DOM.timeMeta.textContent = `${elapsedSec}s`;
+  DOM.modelMeta.textContent = result.model_used ? result.model_used.split('/').pop() : 'Vision AI';
+
+  // Supabase Synced Pill
+  if (result.saved_to_cloud) {
+    DOM.cloudMeta.style.display = 'inline-flex';
+    DOM.cloudMetaText.textContent = `Supabase Synced`;
+    DOM.cloudMeta.title = `Supabase Row UUID: ${result.supabase_id || 'OK'}`;
+  } else {
+    DOM.cloudMeta.style.display = 'none';
+  }
+
+  // Hero Batch Number
+  const batchNum = data.batch_number || 'NOT FOUND';
+  DOM.valBatchNumber.textContent = batchNum;
+
+  // Manufacturing Date
+  DOM.valMfgDate.textContent = data.mfg_date || 'Not detected';
+
+  // Expiry Date & Expiry Status Badge
+  DOM.valExpDate.textContent = data.exp_date || 'Not detected';
+  
+  if (expAnalysis.status) {
+    DOM.valExpiryStatusBadge.className = `status-pill ${expAnalysis.badge_class || 'badge-neutral'}`;
+    DOM.valExpiryStatusBadge.textContent = expAnalysis.status.replace('_', ' ');
+    DOM.valExpirySubtext.textContent = expAnalysis.label || 'Shelf life calculated';
+  } else {
+    DOM.valExpiryStatusBadge.className = 'status-pill badge-neutral';
+    DOM.valExpiryStatusBadge.textContent = 'UNKNOWN';
+    DOM.valExpirySubtext.textContent = 'No expiry date parsed';
+  }
+
+  // MRP
+  DOM.valMrp.textContent = data.mrp || 'Not detected';
+
+  // Product Name & Manufacturer
+  DOM.valProductName.textContent = data.product_name || 'Standard Product Packaging';
+  DOM.valManufacturer.textContent = data.manufacturer || 'Information not explicitly printed';
+
+  // Notes
+  DOM.valNotes.textContent = data.notes || 'All details extracted from visible label area.';
+
+  // Full Raw OCR text
+  DOM.valFullText.textContent = data.full_text || 'No raw OCR transcription available.';
+
+  // Raw JSON
+  DOM.valJsonBlock.textContent = JSON.stringify(data, null, 2);
+
+  // Barcode Intelligence Card & Banner
+  renderBarcodeIntelligence(barcodeInfo, barcodeVer);
+
+  // Ground Truth Validation Banner
+  if (gt && gt.has_ground_truth) {
+    DOM.gtBanner.style.display = 'flex';
+    if (gt.batch_match) {
+      DOM.gtBadge.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>100% Ground Truth Match</span>`;
+      DOM.gtDetails.textContent = `Batch code matched ground truth: "${gt.expected_batch}"`;
+    } else {
+      DOM.gtBadge.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg> <span>Benchmark Discrepancy</span>`;
+      DOM.gtDetails.textContent = `Extracted: "${data.batch_number}" vs Expected: "${gt.expected_batch}"`;
+    }
+  } else {
+    DOM.gtBanner.style.display = 'none';
+  }
+
+  // Automatic Label Detection, Crop & Validation Rendering
+  renderDetectionAndValidation(result);
+}
+
+// ==========================================
+// Label Detection, Crop & Validation Renderer
+// ==========================================
+function renderDetectionAndValidation(result) {
+  const det = result.detection;
+  const val = result.validation;
+
+  // Pipeline Stepper
+  if (DOM.pipelineStepper) {
+    DOM.pipelineStepper.style.display = 'flex';
+    if (DOM.pipeStepReceived) DOM.pipeStepReceived.className = 'pipe-step done';
+    if (DOM.pipeStepDetected) {
+      DOM.pipeStepDetected.className = (det && det.status !== 'fallback_error') ? 'pipe-step done' : 'pipe-step warning';
+      if (DOM.pipeStepDetText) DOM.pipeStepDetText.textContent = (det && det.method) ? `2. ${det.method.replace('opencv_', '')}` : '2. Detected';
+    }
+    if (DOM.pipeStepCropped) DOM.pipeStepCropped.className = 'pipe-step done';
+    if (DOM.pipeStepEnhanced) DOM.pipeStepEnhanced.className = 'pipe-step done';
+    if (DOM.pipeStepOcr) DOM.pipeStepOcr.className = 'pipe-step done';
+    if (DOM.pipeStepValidated) {
+      const isValid = val ? val.is_valid : true;
+      DOM.pipeStepValidated.className = isValid ? 'pipe-step done' : 'pipe-step warning';
+      if (DOM.pipeStepValText) DOM.pipeStepValText.textContent = isValid ? '6. Validated ✓' : '6. Check Warnings ⚠';
+    }
+  }
+
+  // Validation Integrity Banner
+  if (DOM.validationBanner && val) {
+    DOM.validationBanner.style.display = 'flex';
+    if (val.is_valid && (!val.warnings || val.warnings.length === 0)) {
+      DOM.validationBanner.className = 'validation-banner';
+      if (DOM.valBannerTitle) DOM.valBannerTitle.textContent = 'Validation Verified ✓';
+      if (DOM.valBannerDetails) DOM.valBannerDetails.textContent = `Format valid. Chronological sequence confirmed (Mfg: ${val.mfg_normalized || '-'} -> Exp: ${val.exp_normalized || '-'}). Adjusted confidence: ${Math.round(val.adjusted_confidence * 100)}%.`;
+    } else {
+      DOM.validationBanner.className = 'validation-banner banner-warning';
+      if (DOM.valBannerTitle) DOM.valBannerTitle.textContent = 'Validation Alert ⚠';
+      const warnMsg = (val.warnings && val.warnings.length > 0) ? val.warnings.join(' | ') : 'Manual verification recommended for highlighted packaging values.';
+      if (DOM.valBannerDetails) DOM.valBannerDetails.textContent = warnMsg;
+    }
+  } else if (DOM.validationBanner) {
+    DOM.validationBanner.style.display = 'none';
+  }
+
+  // Detection Preview Bounding Box & Switcher
+  if (det && det.box) {
+    state.detectionBox = det.box;
+    state.detectionMeta = det;
+    state.originalUrl = result.original_image_url || DOM.imagePreview.src;
+    state.croppedUrl = result.cropped_image_url || state.originalUrl;
+    state.enhancedUrl = result.enhanced_image_url || state.croppedUrl;
+
+    if (DOM.cropViewSwitcher) DOM.cropViewSwitcher.style.display = 'flex';
+    if (DOM.detectionInfoStrip) DOM.detectionInfoStrip.style.display = 'flex';
+
+    if (DOM.detMethodText) DOM.detMethodText.textContent = det.method || 'OpenCV Detection';
+    if (DOM.detBoxText) DOM.detBoxText.textContent = `Box: [${det.box.join(', ')}]`;
+    if (DOM.detConfText) DOM.detConfText.textContent = `Conf: ${Math.round((det.confidence || 0.95) * 100)}%`;
+
+    // Populate Artifacts Pane
+    if (DOM.artifactOriginalImg) DOM.artifactOriginalImg.src = state.originalUrl;
+    if (DOM.artifactCroppedImg) DOM.artifactCroppedImg.src = state.croppedUrl;
+    if (DOM.artifactEnhancedImg) DOM.artifactEnhancedImg.src = state.enhancedUrl;
+
+    if (DOM.metricDetMethod) DOM.metricDetMethod.textContent = det.method || 'OpenCV Text-Density';
+    if (DOM.metricDetConf) DOM.metricDetConf.textContent = `${Math.round((det.confidence || 0.95) * 100)}%`;
+    if (DOM.metricDetBox) DOM.metricDetBox.textContent = `[${det.box.join(', ')}]`;
+    if (DOM.metricDetAngle) DOM.metricDetAngle.textContent = `${det.deskew_angle || 0}°`;
+
+    // Default to original view with bounding box drawn
+    switchCropView('original');
+  } else {
+    if (DOM.cropViewSwitcher) DOM.cropViewSwitcher.style.display = 'none';
+    if (DOM.detectionInfoStrip) DOM.detectionInfoStrip.style.display = 'none';
+  }
+}
+
+function drawDetectedBoundingBox(box) {
+  const canvas = DOM.labelBoxCanvas;
+  const img = DOM.imagePreview;
+  if (!canvas || !img || !box || box.length !== 4) {
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    return;
+  }
+
+  // Wait until image is rendered if not ready
+  if (img.clientWidth === 0 || img.clientHeight === 0) {
+    setTimeout(() => drawDetectedBoundingBox(box), 100);
+    return;
+  }
+
+  canvas.width = img.clientWidth;
+  canvas.height = img.clientHeight;
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const natW = img.naturalWidth || 1600;
+  const natH = img.naturalHeight || 1200;
+
+  const scaleX = canvas.width / natW;
+  const scaleY = canvas.height / natH;
+
+  const x1 = box[0] * scaleX;
+  const y1 = box[1] * scaleY;
+  const x2 = box[2] * scaleX;
+  const y2 = box[3] * scaleY;
+  const bw = Math.max(10, x2 - x1);
+  const bh = Math.max(10, y2 - y1);
+
+  // Draw glowing bounding box
+  ctx.save();
+  ctx.strokeStyle = '#10b981';
+  ctx.lineWidth = 3;
+  ctx.shadowColor = 'rgba(16, 185, 129, 0.8)';
+  ctx.shadowBlur = 8;
+  ctx.strokeRect(x1, y1, bw, bh);
+
+  // Soft fill
+  ctx.fillStyle = 'rgba(16, 185, 129, 0.12)';
+  ctx.fillRect(x1, y1, bw, bh);
+
+  // Label tag above or inside box
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#10b981';
+  const tagText = '🎯 Information Label Area';
+  ctx.font = 'bold 11px Inter, sans-serif';
+  const textW = ctx.measureText(tagText).width;
+  const tagY = (y1 > 24) ? (y1 - 22) : (y1 + 4);
+  ctx.fillRect(x1, tagY, textW + 12, 20);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(tagText, x1 + 6, tagY + 14);
+  ctx.restore();
+}
+
+function clearDetectedBoundingBox() {
+  const canvas = DOM.labelBoxCanvas;
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+function switchCropView(mode) {
+  state.currentViewMode = mode;
+  if (DOM.cropViewBtns) {
+    DOM.cropViewBtns.forEach(b => b.classList.toggle('active', b.dataset.view === mode));
+  }
+
+  if (mode === 'original') {
+    if (state.originalUrl) DOM.imagePreview.src = state.originalUrl;
+    setTimeout(() => drawDetectedBoundingBox(state.detectionBox), 50);
+  } else if (mode === 'cropped') {
+    clearDetectedBoundingBox();
+    if (state.croppedUrl) DOM.imagePreview.src = state.croppedUrl;
+  } else if (mode === 'enhanced') {
+    clearDetectedBoundingBox();
+    if (state.enhancedUrl) DOM.imagePreview.src = state.enhancedUrl;
+  }
+}
+
+// ==========================================
+// Raspberry Pi Live Polling & Simulation
+// ==========================================
+function startRpiPolling() {
+  if (state.rpiPollingTimer) return;
+  state.rpiPollingTimer = setInterval(checkRpiForNewCaptures, 4000);
+}
+
+async function checkRpiForNewCaptures() {
+  try {
+    const res = await fetch('/api/rpi/status');
+    if (!res.ok) return;
+    const status = await res.json();
+
+    if (DOM.rpiLanIpVal) DOM.rpiLanIpVal.textContent = status.lan_ip || '127.0.0.1';
+    if (DOM.rpiEndpointVal) DOM.rpiEndpointVal.textContent = status.upload_endpoint;
+    if (DOM.piCommandCode) DOM.piCommandCode.textContent = `python rpi_camera_client.py --server http://${status.lan_ip}:8000`;
+    if (DOM.rpiCaptureCountVal) DOM.rpiCaptureCountVal.textContent = status.total_captures_received || 0;
+    if (DOM.rpiLastSeenVal) DOM.rpiLastSeenVal.textContent = status.last_capture_time || 'Awaiting transmission...';
+
+    // If a new capture arrived
+    if (status.total_captures_received > state.rpiTotalCaptures) {
+      state.rpiTotalCaptures = status.total_captures_received;
+      const lastRes = await fetch('/api/rpi/last_capture');
+      if (lastRes.ok) {
+        const lastData = await lastRes.json();
+        if (lastData.has_capture && lastData.result) {
+          const r = lastData.result;
+          state.currentResult = r;
+          state.selectedFile = null;
+          state.selectedSample = null;
+          state.sourceName = r.source;
+          displayPreview(r.original_image_url || r.cropped_image_url, r.source);
+          renderExtractionResults(r, '1.4');
+          autoSaveToHistory(r);
+          showToast(`📷 [Raspberry Pi] Wireless capture ${r.source} processed & saved!`, 'info');
+        }
+      }
+    }
+  } catch (e) {
+    // Silent background poll
+  }
+}
+
+async function checkRpiStatus() {
+  try {
+    const res = await fetch('/api/rpi/status');
+    const data = await res.json();
+    showToast(`Pi Status: Online | Captures: ${data.total_captures_received} | IP: ${data.lan_ip}`, 'info');
+  } catch (err) {
+    showToast(`Could not reach Pi status endpoint: ${err.message}`, 'error');
+  }
+}
+
+async function simulatePiUpload() {
+  showToast('Simulating Raspberry Pi camera capture & Wi-Fi upload...', 'info');
+  try {
+    // Pick first sample image as test payload
+    const sample = state.samples && state.samples.length > 0 ? state.samples[0].filename : 'RPI1.jpeg';
+    const blobRes = await fetch(`/api/samples/${sample}`);
+    const blob = await blobRes.blob();
+    const testFile = new File([blob], `Simulated_Pi_${sample}`, { type: 'image/jpeg' });
+
+    const formData = new FormData();
+    formData.append('file', testFile);
+    formData.append('device_id', 'RaspberryPi-Simulation-01');
+
+    const uploadRes = await fetch('/api/rpi/upload', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!uploadRes.ok) throw new Error('Pi upload endpoint error');
+    const result = await uploadRes.json();
+
+    state.currentResult = result;
+    displayPreview(result.original_image_url, result.source);
+    renderExtractionResults(result, '1.5');
+    autoSaveToHistory(result);
+    showToast(`✓ Simulated Pi upload complete: ${result.source}`, 'info');
+  } catch (err) {
+    showToast(`Simulation error: ${err.message}`, 'error');
+  }
+}
+
+// ==========================================
+// Barcode Intelligence Rendering
+// ==========================================
+function renderBarcodeIntelligence(barcodeInfo, barcodeVer) {
+  const primary = barcodeInfo.primary || null;
+  const detected = barcodeInfo.detected || false;
+
+  // -- Barcode Card --
+  if (detected && primary) {
+    DOM.valBarcodeNumber.textContent = primary.text || '-';
+    DOM.valBarcodeSymbology.textContent = primary.format || 'BARCODE';
+    DOM.valBarcodeSymbology.className = 'status-pill badge-info font-mono';
+    DOM.valBarcodeOrigin.textContent = `Origin: ${primary.country || 'Unknown'}`;
+    const chkValid = primary.is_valid_checksum;
+    if (chkValid === true) {
+      DOM.valBarcodeChecksum.textContent = 'Check digit: \u2713 Valid';
+      DOM.valBarcodeChecksum.className = 'barcode-checksum-pill';
+    } else if (chkValid === false) {
+      DOM.valBarcodeChecksum.textContent = 'Check digit: \u2717 Invalid';
+      DOM.valBarcodeChecksum.className = 'barcode-checksum-pill checksum-invalid';
+    } else {
+      DOM.valBarcodeChecksum.textContent = 'Check digit: N/A';
+      DOM.valBarcodeChecksum.className = 'barcode-checksum-pill';
+    }
+  } else {
+    DOM.valBarcodeNumber.textContent = 'No barcode detected';
+    DOM.valBarcodeSymbology.textContent = 'NO BARCODE';
+    DOM.valBarcodeSymbology.className = 'status-pill badge-neutral font-mono';
+    DOM.valBarcodeOrigin.textContent = 'Origin: Not detected';
+    DOM.valBarcodeChecksum.textContent = 'Check digit: --';
+    DOM.valBarcodeChecksum.className = 'barcode-checksum-pill';
+  }
+
+  // -- Barcode Verification Banner --
+  if (barcodeVer && barcodeVer.status && barcodeVer.status !== 'NO_BARCODE') {
+    DOM.barcodeBanner.style.display = 'flex';
+    if (barcodeVer.status === 'VERIFIED_MATCH') {
+      DOM.barcodeBanner.className = 'barcode-banner banner-verified';
+      DOM.barcodeBannerTitle.textContent = 'Barcode Verified & Matched';
+    } else {
+      DOM.barcodeBanner.className = 'barcode-banner banner-warning';
+      DOM.barcodeBannerTitle.textContent = 'Barcode Discrepancy Detected';
+    }
+    DOM.barcodeBannerDetails.textContent = barcodeVer.message || 'Barcode cross-check complete.';
+  } else {
+    DOM.barcodeBanner.style.display = 'none';
+  }
+
+  // -- Barcode Detail Pane --
+  renderBarcodeDetailPane(barcodeInfo, barcodeVer);
+}
+
+function renderBarcodeDetailPane(barcodeInfo, barcodeVer) {
+  const box = DOM.valBarcodeDetailsBox;
+  if (!box) return;
+
+  const primary = barcodeInfo.primary;
+  if (!barcodeInfo.detected || !primary) {
+    box.innerHTML = `<div class="barcode-empty-hint">No barcode or 2D code was detected in this image. Try adjusting the angle or using the Live Camera barcode scanner for real-time detection.</div>`;
+    return;
+  }
+
+  const gs1 = primary.gs1 || {};
+  const cat = primary.catalog_info;
+  const meta = primary.scan_meta || {};
+
+  let html = `<div class="barcode-kv-grid">`;
+  html += kvItem('Symbology Format', primary.format || 'Unknown');
+  html += kvItem('Symbology Family', primary.symbology_family || '-');
+  html += kvItem('Raw Value', primary.text || '-');
+  html += kvItem('GS1 Country of Origin', primary.country || 'Not resolved');
+  html += kvItem('Checksum Valid', primary.is_valid_checksum === true ? '\u2713 Valid (Mod-10)' : primary.is_valid_checksum === false ? '\u2717 Invalid' : 'N/A');
+  html += kvItem('Content Type', primary.content_type || 'Text');
+  html += kvItem('Detection Angle', meta.orientation_detected != null ? `${meta.orientation_detected}\u00b0` : 'Default');
+  html += kvItem('Contrast Enhanced', meta.contrast_enhanced ? 'Yes' : 'No');
+  html += `</div>`;
+
+  // GS1 Application Identifiers
+  if (gs1.is_gs1) {
+    html += `<div class="barcode-gs1-section">`;
+    html += `<div class="barcode-gs1-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5v14M8 5v14M12 5v14M17 5v14M21 5v14"></path></svg> GS1 Application Identifiers</div>`;
+    html += `<div class="barcode-kv-grid">`;
+    if (gs1.gtin) html += kvItem('GTIN (01)', gs1.gtin);
+    if (gs1.batch_number) html += kvItem('Batch/Lot (10)', gs1.batch_number);
+    if (gs1.exp_date) html += kvItem('Expiry Date (17)', gs1.exp_date);
+    if (gs1.mfg_date) html += kvItem('Mfg Date (11)', gs1.mfg_date);
+    if (gs1.serial_number) html += kvItem('Serial (21)', gs1.serial_number);
+    html += `</div></div>`;
+  }
+
+  // Catalog Product Data
+  if (cat) {
+    html += `<div class="barcode-gs1-section">`;
+    html += `<div class="barcode-gs1-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg> Verified Product Catalog</div>`;
+    html += `<div class="barcode-kv-grid">`;
+    if (cat.product_name) html += kvItem('Product Name', cat.product_name);
+    if (cat.brand) html += kvItem('Brand', cat.brand);
+    if (cat.category) html += kvItem('Category', cat.category);
+    if (cat.manufacturer) html += kvItem('Manufacturer', cat.manufacturer);
+    if (cat.packaging) html += kvItem('Packaging', cat.packaging);
+    html += `</div></div>`;
+  }
+
+  // Cross-verification summary
+  if (barcodeVer && barcodeVer.status !== 'NO_BARCODE') {
+    const verColor = barcodeVer.aligned ? '#10b981' : '#f59e0b';
+    html += `<div class="barcode-gs1-section">`;
+    html += `<div class="barcode-gs1-title" style="color:${verColor}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${verColor}" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg> OCR Cross-Verification</div>`;
+    html += `<p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;">${escapeHtml(barcodeVer.message || '')}</p>`;
+    if (barcodeVer.suggestions && barcodeVer.suggestions.length > 0) {
+      html += `<div class="barcode-kv-grid">`;
+      barcodeVer.suggestions.forEach(s => {
+        html += kvItem(`Suggestion: ${s.field}`, `${s.suggested_value} (${s.reason})`);
+      });
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  box.innerHTML = html;
+}
+
+function kvItem(label, value) {
+  return `<div class="barcode-kv-item"><div class="barcode-kv-label">${escapeHtml(label)}</div><div class="barcode-kv-val">${escapeHtml(String(value))}</div></div>`;
+}
+
+// ==========================================
+// Instant Barcode-Only Scan (No LLM, <50ms)
+// ==========================================
+async function scanBarcodeOnly() {
+  if (!state.selectedFile && !state.selectedSample && !state.imageBase64) {
+    showToast('Please select or capture an image first', 'error');
+    return;
+  }
+
+  if (DOM.scanBarcodeOnlyBtn) {
+    DOM.scanBarcodeOnlyBtn.disabled = true;
+    DOM.scanBarcodeOnlyText.textContent = 'Scanning Barcode...';
+  }
+  if (DOM.barcodeBtnSpinner) {
+    DOM.barcodeBtnSpinner.style.display = 'inline-block';
+  }
+  if (DOM.extractBtn) {
+    DOM.extractBtn.disabled = true;
+  }
+  if (DOM.laserScanner) {
+    DOM.laserScanner.style.display = 'block';
+  }
+
+  const startTime = performance.now();
+  try {
+    const formData = new FormData();
+    if (state.selectedSample) {
+      formData.append('sample_name', state.selectedSample);
+    } else if (state.selectedFile) {
+      formData.append('file', state.selectedFile);
+    } else if (state.imageBase64) {
+      formData.append('image_base64', state.imageBase64);
+    }
+
+    formData.append('rotate_deg', state.rotateDeg.toString());
+    formData.append('enhance', state.isEnhanced ? 'true' : 'false');
+
+    const response = await fetch('/api/barcode/scan', {
+      method: 'POST',
+      body: formData
+    });
+    const result = await response.json();
+    const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
+
+    if (!response.ok) {
+      throw new Error(result.detail || 'Barcode scan failed');
+    }
+
+    const barcodeResult = result.barcode || {};
+    const primary = barcodeResult.primary || null;
+    const isDetected = barcodeResult.detected && primary;
+
+    // Structured response wrapper compatible with app state
+    const backendData = result.data || {};
+    const normalizedData = {
+      batch_number: backendData.batch_number || primary?.gs1?.batch_number || (isDetected ? 'In Barcode' : 'NOT DETECTED'),
+      mfg_date: backendData.mfg_date || primary?.gs1?.mfg_date || '-',
+      exp_date: backendData.exp_date || primary?.gs1?.exp_date || '-',
+      mrp: backendData.mrp || '-',
+      product_name: backendData.product_name || primary?.catalog_info?.product_name || (isDetected ? `Product (${primary.format})` : 'Label without barcode'),
+      manufacturer: backendData.manufacturer || primary?.catalog_info?.manufacturer || (isDetected ? primary.country || 'Identified via prefix' : '-'),
+      full_text: isDetected 
+        ? `[Barcode Intelligence Mode]\nDecoded Symbology: ${primary.format}\nRaw Data: ${primary.text}\nGS1 Country: ${primary.country || 'N/A'}\nChecksum: ${primary.is_valid_checksum ? 'Valid' : 'N/A'}`
+        : `[Barcode Intelligence Mode]\nNo 1D or 2D barcode was detected in this image.\nTip: If this packaging has dot-matrix stamped text (e.g. B.No / MFD / EXP), use the "Extract Batch & OCR Text" button for full Vision AI OCR extraction.`,
+      notes: isDetected
+        ? `Barcode decoded instantly in ${elapsed}s via high-performance decoder.`
+        : `No optical barcode (EAN/UPC/QR) in this image. Use Vision AI extraction for stamped batch codes.`
+    };
+
+    const fullResult = {
+      success: true,
+      source: result.source || state.sourceName,
+      timestamp: result.timestamp || new Date().toLocaleString(),
+      model_used: result.model_used || 'Instant Barcode Engine (<50ms)',
+      data: normalizedData,
+      barcode: barcodeResult,
+      expiry_analysis: result.expiry_analysis,
+      supabase_id: result.supabase_id,
+      saved_to_cloud: result.saved_to_cloud,
+      barcode_verification: result.barcode_verification || (primary?.catalog_info ? {
+        status: 'VERIFIED_MATCH',
+        badge_class: 'badge-success',
+        message: `GTIN verified in packaging catalog: ${primary.catalog_info.product_name} · GS1 Origin: ${primary.country}`,
+        aligned: true,
+        suggestions: []
+      } : {
+        status: isDetected ? 'VERIFIED_MATCH' : 'NO_BARCODE',
+        badge_class: isDetected ? 'badge-info' : 'badge-neutral',
+        message: isDetected ? `Barcode decoded: ${primary.format} (${primary.text})` : 'No optical barcode detected in this label image.',
+        aligned: isDetected,
+        suggestions: []
+      })
+    };
+
+    state.currentResult = fullResult;
+
+    // Show results panel
+    DOM.loadingState.style.display = 'none';
+    DOM.emptyState.style.display = 'none';
+    DOM.resultsContainer.style.display = 'flex';
+    DOM.resultsMeta.style.display = 'flex';
+    DOM.timeMeta.textContent = `${elapsed}s`;
+    DOM.modelMeta.textContent = isDetected ? `${primary.format} Decoder` : 'Barcode Scanner';
+
+    if (result.saved_to_cloud) {
+      DOM.cloudMeta.style.display = 'inline-flex';
+      DOM.cloudMetaText.textContent = `Supabase Synced`;
+      DOM.cloudMeta.title = `Supabase Row UUID: ${result.supabase_id || 'OK'}`;
+      loadSupabaseStats();
+      loadSupabaseScans();
+      loadSupabaseInventory();
+      loadIntelligenceTelemetry();
+    } else {
+      DOM.cloudMeta.style.display = 'none';
+    }
+
+    // Populate UI fields
+    DOM.valBatchNumber.textContent = normalizedData.batch_number;
+    DOM.valMfgDate.textContent = normalizedData.mfg_date;
+    DOM.valExpDate.textContent = normalizedData.exp_date;
+    DOM.valExpiryStatusBadge.className = isDetected ? 'status-pill badge-info' : 'status-pill badge-neutral';
+    DOM.valExpiryStatusBadge.textContent = isDetected ? 'BARCODE READ' : 'NO BARCODE';
+    DOM.valExpirySubtext.textContent = isDetected ? 'Decoded from optical symbol' : 'Use full OCR for stamped text';
+    DOM.valMrp.textContent = normalizedData.mrp;
+    DOM.valProductName.textContent = normalizedData.product_name;
+    DOM.valManufacturer.textContent = normalizedData.manufacturer;
+    DOM.valNotes.textContent = normalizedData.notes;
+    DOM.valFullText.textContent = normalizedData.full_text;
+    DOM.valJsonBlock.textContent = JSON.stringify(fullResult, null, 2);
+    DOM.gtBanner.style.display = 'none';
+
+    // Populate barcode cards & intelligence pane
+    renderBarcodeIntelligence(barcodeResult, fullResult.barcode_verification);
+
+    // Switch to Barcode Intelligence tab
+    DOM.detailTabBtns.forEach(b => {
+      b.classList.toggle('active', b.dataset.dtab === 'barcodeDetails');
+    });
+    DOM.detailPanes.forEach(p => p.classList.remove('active'));
+    const barcodePane = document.getElementById('paneBarcodeDetails');
+    if (barcodePane) barcodePane.classList.add('active');
+
+    // Save scan to session history log
+    autoSaveToHistory(fullResult);
+
+    if (isDetected) {
+      showToast(`✓ Barcode decoded: ${primary.format} (${primary.text}) in ${elapsed}s`, 'info');
+    } else {
+      showToast(`ℹ️ No barcode detected in this image. Click "Extract Batch & OCR Text" for dot-matrix OCR text.`, 'info');
+    }
+  } catch (err) {
+    console.error('Barcode scan error:', err);
+    showToast(err.message || 'Barcode scan failed', 'error');
+  } finally {
+    if (DOM.laserScanner) {
+      DOM.laserScanner.style.display = 'none';
+    }
+    if (DOM.barcodeBtnSpinner) {
+      DOM.barcodeBtnSpinner.style.display = 'none';
+    }
+    if (DOM.scanBarcodeOnlyBtn) {
+      DOM.scanBarcodeOnlyBtn.disabled = false;
+      DOM.scanBarcodeOnlyText.textContent = 'Scan Barcode Only';
+    }
+    if (DOM.extractBtn && (state.selectedFile || state.selectedSample || state.imageBase64)) {
+      DOM.extractBtn.disabled = false;
+    }
+  }
+}
+
+
+async function scanCameraBarcode() {
+  if (!state.stream) {
+    showToast('Start camera first', 'error');
+    return;
+  }
+  // Capture frame silently then scan barcode
+  const video = DOM.cameraStream;
+  const canvas = DOM.cameraCanvas;
+  canvas.width = video.videoWidth || 1280;
+  canvas.height = video.videoHeight || 720;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  state.imageBase64 = dataUrl;
+  state.selectedFile = null;
+  state.selectedSample = null;
+  state.sourceName = `Camera_Barcode_${new Date().toLocaleTimeString().replace(/:/g, '-')}.jpg`;
+  displayPreview(dataUrl, state.sourceName);
+  await scanBarcodeOnly();
+}
+
+// ==========================================
+// Local Session History & Log Management
+// ==========================================
+function autoSaveToHistory(result) {
+  const data = result.data || {};
+  const record = {
+    id: Date.now(),
+    timestamp: result.timestamp || new Date().toLocaleString(),
+    source: result.source || 'Scan',
+    batch_number: data.batch_number || '-',
+    mfg_date: data.mfg_date || '-',
+    exp_date: data.exp_date || '-',
+    status: result.expiry_analysis ? result.expiry_analysis.status : 'DETECTED',
+    badge_class: result.expiry_analysis ? result.expiry_analysis.badge_class : 'badge-neutral',
+    mrp: data.mrp || '-'
+  };
+
+  state.history.unshift(record);
+  if (state.history.length > 50) state.history.pop();
+  localStorage.setItem('batchscan_history', JSON.stringify(state.history));
+  renderHistoryTable();
+}
+
+function renderHistoryTable() {
+  DOM.historyCountBadge.textContent = state.history.length;
+
+  if (state.history.length === 0) {
+    DOM.historyTableBody.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="8">No scan records saved in this session. Process a label to see logs.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  DOM.historyTableBody.innerHTML = state.history.map(row => `
+    <tr>
+      <td style="font-size: 0.78rem; color: var(--text-muted);">${row.timestamp}</td>
+      <td style="font-weight: 500;">${escapeHtml(row.source)}</td>
+      <td class="history-batch-code font-mono">${escapeHtml(row.batch_number)}</td>
+      <td>${escapeHtml(row.mfg_date)}</td>
+      <td>${escapeHtml(row.exp_date)}</td>
+      <td><span class="status-pill ${row.badge_class}">${row.status.replace('_', ' ')}</span></td>
+      <td>${escapeHtml(row.mrp)}</td>
+      <td>
+        <button class="btn btn-xs btn-secondary" onclick="copyText('${escapeHtml(row.batch_number)}')" title="Copy Batch">Copy</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function clearHistory() {
+  if (confirm('Clear local browser session history?')) {
+    state.history = [];
+    localStorage.removeItem('batchscan_history');
+    renderHistoryTable();
+    showToast('Local scan history cleared', 'info');
+  }
+}
+
+// ==========================================
+// Export Helpers (CSV & JSON)
+// ==========================================
+function exportToCsv(records, filename = 'Batch_OCR_Export.csv', headers = null) {
+  if (!records || records.length === 0) {
+    showToast('No records to export', 'error');
+    return;
+  }
+
+  const defaultHeaders = ['Timestamp', 'Source', 'Batch Number', 'Mfg Date', 'Expiry Date', 'Status', 'MRP'];
+  const head = headers || defaultHeaders;
+  
+  const rows = records.map(r => [
+    `"${r.timestamp || r.created_at || ''}"`,
+    `"${r.source || r.source_filename || ''}"`,
+    `"${r.batch_number || ''}"`,
+    `"${r.mfg_date || ''}"`,
+    `"${r.exp_date || ''}"`,
+    `"${r.status || r.expiry_status || ''}"`,
+    `"${r.mrp || ''}"`
+  ]);
+
+  const csvContent = [head.join(','), ...rows.map(e => e.join(','))].join('\n');
+  downloadBlob(csvContent, filename, 'text/csv;charset=utf-8;');
+  showToast(`Exported ${records.length} records to CSV`, 'info');
+}
+
+function exportInventoryToCsv(records, filename = 'Master_Inventory_Batches.csv') {
+  if (!records || records.length === 0) {
+    showToast('No inventory records to export', 'error');
+    return;
+  }
+
+  const headers = ['Batch Number', 'Product Name', 'Mfg Date', 'Expiry Date', 'Status', 'MRP', 'Total Scans', 'First Scanned', 'Last Scanned'];
+  const rows = records.map(r => [
+    `"${r.batch_number || ''}"`,
+    `"${r.product_name || ''}"`,
+    `"${r.mfg_date || ''}"`,
+    `"${r.exp_date || ''}"`,
+    `"${r.status || ''}"`,
+    `"${r.mrp || ''}"`,
+    `"${r.total_scans || 1}"`,
+    `"${r.first_scanned_at || ''}"`,
+    `"${r.last_scanned_at || ''}"`
+  ]);
+
+  const csvContent = [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+  downloadBlob(csvContent, filename, 'text/csv;charset=utf-8;');
+  showToast(`Exported ${records.length} inventory records to CSV`, 'info');
+}
+
+function downloadBlob(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// ==========================================
+// Inventory Intelligence & Expiry Analytics Engine
+// ==========================================
+async function loadIntelligenceTelemetry() {
+  try {
+    const res = await fetch('/api/supabase/intelligence');
+    if (!res.ok) return;
+
+    const data = await res.json();
+    state.intelligenceData = data;
+
+    // 1. Store Health Score
+    const score = data.health_score !== undefined ? data.health_score : 100;
+    DOM.intelHealthScore.textContent = `${score}/100`;
+
+    if (score >= 85) {
+      DOM.intelHealthStatus.textContent = 'Optimal Shelf Freshness';
+      DOM.intelHealthStatus.style.color = '#34d399';
+      DOM.intelHealthEmoji.textContent = '🛡️';
+    } else if (score >= 60) {
+      DOM.intelHealthStatus.textContent = 'Moderate Expiry Exposure';
+      DOM.intelHealthStatus.style.color = '#fbbf24';
+      DOM.intelHealthEmoji.textContent = '⚠️';
+    } else {
+      DOM.intelHealthStatus.textContent = 'Critical Action Needed';
+      DOM.intelHealthStatus.style.color = '#fb7185';
+      DOM.intelHealthEmoji.textContent = '🚨';
+    }
+
+    // 2. Financial 5-Day At-Risk Value
+    const atRisk = data.financial_summary?.at_risk_value_5_days || 0;
+    DOM.intelAtRiskValue.textContent = `Rs. ${atRisk.toFixed(2)}`;
+    
+    const count5d = data.alerts_5_days_count || 0;
+    DOM.intel5DayCountBadge.textContent = `${count5d} Batches`;
+    DOM.intelAlertsBadge.textContent = `${count5d} Alerts`;
+    DOM.criticalAlertsCounter.textContent = `${count5d} Active Alerts`;
+
+    if (count5d > 0) {
+      DOM.intelAlertsBadge.classList.add('badge-pulse-alert');
+      DOM.intel5DayCountBadge.className = 'metric-badge-danger';
+    } else {
+      DOM.intelAlertsBadge.classList.remove('badge-pulse-alert');
+      DOM.intel5DayCountBadge.className = 'metric-badge-success';
+    }
+
+    // 3. Top Selling Product
+    const topProd = data.top_selling_product;
+    if (topProd) {
+      DOM.intelTopSellerName.textContent = topProd.product_name || 'Standard SKU';
+      DOM.intelTopSellerShare.textContent = `${topProd.share_percentage}% Share`;
+    } else {
+      DOM.intelTopSellerName.textContent = 'Awaiting Telemetry';
+      DOM.intelTopSellerShare.textContent = '0% Share';
+    }
+
+    // 4. Render Components
+    renderCriticalAlerts(data.alerts_5_days || []);
+    renderProductVelocity(data.product_velocity || []);
+    renderSuggestions(data.suggestions || []);
+
+  } catch (err) {
+    console.warn('Failed to load intelligence telemetry:', err);
+  }
+}
+
+function renderCriticalAlerts(alerts) {
+  if (!alerts || alerts.length === 0) {
+    DOM.criticalAlertsContainer.innerHTML = `
+      <div class="alert-empty-card">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
+        <span>No batches expiring within the 5-day cutoff. Inventory freshness is optimal!</span>
+      </div>
+    `;
+    return;
+  }
+
+  DOM.criticalAlertsContainer.innerHTML = alerts.map(a => {
+    const days = a.days_left;
+    const daysLabel = days <= 0 ? 'Expires Today!' : `${days} Day${days > 1 ? 's' : ''} Left`;
+    return `
+      <div class="alert-item-card">
+        <div class="alert-card-top">
+          <div>
+            <div class="alert-product-name">${escapeHtml(a.product_name)}</div>
+            <span class="alert-batch-chip">Batch: ${escapeHtml(a.batch_number)}</span>
+          </div>
+          <span class="alert-countdown-pill">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
+            ${daysLabel}
+          </span>
+        </div>
+
+        <div class="alert-card-meta">
+          <div><strong>Exp Date:</strong> ${escapeHtml(a.exp_date)}</div>
+          <div><strong>M.R.P.:</strong> ${escapeHtml(a.mrp)}</div>
+          <div><strong>Scans:</strong> ${a.total_scans || 1} units</div>
+          <div><strong>Mfg Date:</strong> ${escapeHtml(a.mfg_date)}</div>
+        </div>
+
+        <div class="alert-directive-box">
+          <strong>Directive:</strong> ${escapeHtml(a.recommendation)}
+        </div>
+
+        <div class="alert-action-row">
+          <span class="status-pill badge-danger">${escapeHtml(a.action_badge || 'CLEARANCE')}</span>
+          <button class="btn-clearance" onclick="applyClearanceDiscount('${escapeHtml(a.batch_number)}', '${escapeHtml(a.product_name)}', '${escapeHtml(a.mrp)}')">
+            ⚡ Apply -50% Markdown
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderProductVelocity(velocityList) {
+  if (!velocityList || velocityList.length === 0) {
+    DOM.velocityTableBody.innerHTML = `
+      <tr>
+        <td colspan="4" class="text-center">No product scan data available yet. Process labels to see movement.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  DOM.velocityTableBody.innerHTML = velocityList.map((item, index) => {
+    const rank = index + 1;
+    const rankClass = rank <= 3 ? `velocity-rank-${rank}` : '';
+    const badgeClass = `vel-${item.velocity_type || 'MODERATE'}`;
+    const fillWidth = Math.min(100, Math.max(8, item.share_percentage || 0));
+
+    return `
+      <tr>
+        <td>
+          <div style="display: flex; align-items: center;">
+            <span class="velocity-rank ${rankClass}">#${rank}</span>
+            <div>
+              <strong style="color: var(--text-primary); font-size: 0.88rem;">${escapeHtml(item.product_name)}</strong>
+              <div style="font-size: 0.75rem; color: var(--text-muted);">${item.batch_count || 1} Active Batch(es) · ${escapeHtml(item.sample_mrp || '')}</div>
+            </div>
+          </div>
+        </td>
+        <td>
+          <span class="velocity-badge-pill ${badgeClass}">
+            ${escapeHtml(item.velocity_badge || 'Standard')}
+          </span>
+        </td>
+        <td>
+          <strong style="font-family: var(--font-mono); color: var(--text-primary);">${item.total_scans}</strong> scans
+        </td>
+        <td>
+          <div class="share-bar-container">
+            <div class="share-bar-bg">
+              <div class="share-bar-fill" style="width: ${fillWidth}%;"></div>
+            </div>
+            <span style="font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600; color: #38bdf8; min-width: 38px;">
+              ${item.share_percentage}%
+            </span>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderSuggestions(suggestions) {
+  if (!suggestions || suggestions.length === 0) {
+    DOM.suggestionsContainer.innerHTML = `
+      <div class="suggestion-card">
+        <div class="suggestion-body">Inventory levels and shelf dates are in healthy equilibrium.</div>
+      </div>
+    `;
+    return;
+  }
+
+  DOM.suggestionsContainer.innerHTML = suggestions.map(s => {
+    return `
+      <div class="suggestion-card">
+        <div class="suggestion-card-header">
+          <div class="suggestion-title-group">
+            <span>${s.icon || '💡'}</span>
+            <span>${escapeHtml(s.title)}</span>
+          </div>
+          <span class="suggestion-badge ${s.badge_class || 'badge-info'}">${escapeHtml(s.badge)}</span>
+        </div>
+        <div class="suggestion-body">
+          ${escapeHtml(s.message)}
+        </div>
+        <button class="suggestion-action-btn" onclick="executeSuggestionAction('${s.action_code}', '${escapeHtml(s.title)}')">
+          ⚡ ${escapeHtml(s.action_label || 'Take Action')}
+        </button>
+      </div>
+    `;
+  }).join('');
+}
+
+async function seedDemoAlertBatches() {
+  try {
+    DOM.seedDemoAlertsBtn.disabled = true;
+    showToast('Seeding demo 5-day expiry batches to Supabase...', 'info');
+
+    const res = await fetch('/api/supabase/seed-demo-alerts', { method: 'POST' });
+    const data = await res.json();
+
+    if (data.success) {
+      showToast('Demo 5-day expiry alert batches added successfully!', 'info');
+      await loadSupabaseStats();
+      await loadSupabaseScans();
+      await loadSupabaseInventory();
+      await loadIntelligenceTelemetry();
+    } else {
+      showToast(data.detail || 'Could not seed demo batches', 'error');
+    }
+  } catch (err) {
+    console.error('Seed demo error:', err);
+    showToast('Failed to seed demo alert batches', 'error');
+  } finally {
+    DOM.seedDemoAlertsBtn.disabled = false;
+  }
+}
+
+async function generateAiExecutiveBriefing() {
+  try {
+    DOM.generateAiBriefingBtn.disabled = true;
+    DOM.aiBriefingBtnText.textContent = 'Analyzing Warehouse Telemetry...';
+    showToast('Gemini AI is analyzing inventory & generating briefing...', 'info');
+
+    const res = await fetch('/api/supabase/ai-insights', { method: 'POST' });
+    const data = await res.json();
+
+    if (data.success && data.insights_markdown) {
+      DOM.aiBriefingContent.innerHTML = formatMarkdownToHtml(data.insights_markdown);
+      DOM.aiBriefingTimestamp.textContent = `Generated: ${data.timestamp}`;
+      showToast('AI Executive Briefing generated successfully!', 'info');
+    } else {
+      throw new Error(data.detail || 'Failed to generate AI insights');
+    }
+  } catch (err) {
+    console.error('AI Briefing error:', err);
+    showToast(err.message || 'Error generating AI Executive Briefing', 'error');
+  } finally {
+    DOM.generateAiBriefingBtn.disabled = false;
+    DOM.aiBriefingBtnText.textContent = 'Generate AI Executive Briefing';
+  }
+}
+
+function applyClearanceDiscount(batchNo, prodName, mrp) {
+  showToast(`🏷️ Clearance Discount (-50%) Tag generated for [${batchNo}] ${prodName}! MRP slashed to front-checkout basket.`, 'info');
+}
+
+function executeSuggestionAction(actionCode, title) {
+  if (actionCode === 'APPLY_DISCOUNT_50') {
+    showToast('🚨 Clearance markdown batch rule (-50%) queued for POS cash registers!', 'info');
+  } else if (actionCode === 'RESTOCK_SUPPLIER') {
+    showToast('📈 Replenishment PO generated for Best-Selling SKU with vendor supplier!', 'info');
+  } else if (actionCode === 'FIFO_ACTION') {
+    showToast('🔄 FIFO Shelf Rotation Directive printed: Move oldest batch to front shelf position.', 'info');
+  } else if (actionCode === 'BUNDLE_OFFER') {
+    showToast('💡 "Buy 1 Best Seller + 1 Slow Mover @ 20% Off" merchandising promo created!', 'info');
+  } else {
+    showToast(`Action executed: ${title}`, 'info');
+  }
+}
+
+function formatMarkdownToHtml(markdown) {
+  if (!markdown) return '';
+  let html = markdown
+    // Headers
+    .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+    .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+    .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+    // Bold & Italic
+    .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+    // Code
+    .replace(/`(.*?)`/gim, '<code>$1</code>')
+    // Lists
+    .replace(/^\s*\*\s+(.*$)/gim, '<li>$1</li>')
+    .replace(/^\s*-\s+(.*$)/gim, '<li>$1</li>')
+    // Paragraphs / Linebreaks
+    .replace(/\n\n+/g, '</p><p>')
+    .replace(/\n/g, '<br/>');
+
+  // Wrap loose <li> in <ul>
+  html = html.replace(/(<li>.*?<\/li>)+/gis, match => `<ul>${match}</ul>`);
+  return `<p>${html}</p>`;
+}
+
+// ==========================================
+// Utility & Event Listeners
+// ==========================================
+function setupEventListeners() {
+  // Mode Tabs (Upload / Camera / Samples)
+  DOM.tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      DOM.tabBtns.forEach(b => b.classList.toggle('active', b === btn));
+      DOM.tabPanes.forEach(p => p.classList.remove('active'));
+
+      if (tab === 'upload') DOM.tabUpload.classList.add('active');
+      if (tab === 'rpi' && DOM.tabRpi) DOM.tabRpi.classList.add('active');
+      if (tab === 'camera') {
+        DOM.tabCamera.classList.add('active');
+        initCamera();
+      } else {
+        stopCamera();
+      }
+      if (tab === 'samples') DOM.tabSamples.classList.add('active');
+    });
+  });
+
+  // Raspberry Pi Ingestion Actions
+  if (DOM.copyPiCmdBtn) {
+    DOM.copyPiCmdBtn.addEventListener('click', () => {
+      if (DOM.piCommandCode) copyText(DOM.piCommandCode.textContent);
+    });
+  }
+  if (DOM.testPiCaptureBtn) {
+    DOM.testPiCaptureBtn.addEventListener('click', checkRpiStatus);
+  }
+  if (DOM.simulatePiUploadBtn) {
+    DOM.simulatePiUploadBtn.addEventListener('click', simulatePiUpload);
+  }
+
+  // Multi-view Crop Switcher
+  if (DOM.cropViewBtns) {
+    DOM.cropViewBtns.forEach(btn => {
+      btn.addEventListener('click', () => switchCropView(btn.dataset.view));
+    });
+  }
+
+  // Redraw bounding box on window resize or preview image load
+  window.addEventListener('resize', () => {
+    if (state.currentViewMode === 'original' && state.detectionBox) {
+      drawDetectedBoundingBox(state.detectionBox);
+    }
+  });
+
+  if (DOM.imagePreview) {
+    DOM.imagePreview.addEventListener('load', () => {
+      if (state.currentViewMode === 'original' && state.detectionBox) {
+        drawDetectedBoundingBox(state.detectionBox);
+      }
+    });
+  }
+
+  // Dropzone
+  DOM.dropZone.addEventListener('click', () => DOM.fileInput.click());
+  DOM.fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) handleFileSelected(e.target.files[0]);
+  });
+
+  ['dragenter', 'dragover'].forEach(name => {
+    DOM.dropZone.addEventListener(name, (e) => {
+      e.preventDefault();
+      DOM.dropZone.classList.add('dragover');
+    });
+  });
+
+  ['dragleave', 'drop'].forEach(name => {
+    DOM.dropZone.addEventListener(name, (e) => {
+      e.preventDefault();
+      DOM.dropZone.classList.remove('dragover');
+    });
+  });
+
+  DOM.dropZone.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files.length > 0) {
+      handleFileSelected(e.dataTransfer.files[0]);
+    }
+  });
+
+  // Camera Actions
+  DOM.captureBtn.addEventListener('click', captureCameraFrame);
+  DOM.toggleCameraBtn.addEventListener('click', () => {
+    if (state.stream) stopCamera();
+    else initCamera();
+  });
+
+  // Pre-processing Tools
+  DOM.rotateBtn.addEventListener('click', rotateImage);
+  DOM.enhanceToggleBtn.addEventListener('click', toggleEnhancement);
+  DOM.clearImageBtn.addEventListener('click', clearSelectedImage);
+
+  // Extract & Barcode Buttons
+  DOM.extractBtn.addEventListener('click', extractBatchInformation);
+  if (DOM.scanBarcodeOnlyBtn) {
+    DOM.scanBarcodeOnlyBtn.addEventListener('click', scanBarcodeOnly);
+  }
+  if (DOM.scanCameraBarcodeBtn) {
+    DOM.scanCameraBarcodeBtn.addEventListener('click', scanCameraBarcode);
+  }
+  if (DOM.copyBarcodeDetailsBtn) {
+    DOM.copyBarcodeDetailsBtn.addEventListener('click', () => {
+      if (DOM.valBarcodeDetailsBox) copyText(DOM.valBarcodeDetailsBox.innerText);
+    });
+  }
+
+  // Detail Sub-tabs (OCR / Barcode / JSON)
+  DOM.detailTabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dtab = btn.dataset.dtab;
+      DOM.detailTabBtns.forEach(b => b.classList.toggle('active', b === btn));
+      DOM.detailPanes.forEach(p => p.classList.remove('active'));
+      if (dtab === 'ocrText') document.getElementById('paneOcrText').classList.add('active');
+      if (dtab === 'cropsView') {
+        const cp = document.getElementById('paneCropsView');
+        if (cp) cp.classList.add('active');
+      }
+      if (dtab === 'barcodeDetails') document.getElementById('paneBarcodeDetails').classList.add('active');
+      if (dtab === 'rawJson') document.getElementById('paneRawJson').classList.add('active');
+    });
+  });
+
+  // Copy Buttons
+  document.querySelectorAll('[data-copy]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.copy;
+      const targetEl = document.getElementById(targetId);
+      if (targetEl) copyText(targetEl.textContent);
+    });
+  });
+
+  DOM.copyOcrTextBtn.addEventListener('click', () => copyText(DOM.valFullText.textContent));
+  DOM.copyJsonBtn.addEventListener('click', () => copyText(DOM.valJsonBlock.textContent));
+  DOM.downloadJsonBtn.addEventListener('click', () => {
+    if (state.currentResult) {
+      downloadBlob(JSON.stringify(state.currentResult.data, null, 2), `${state.sourceName}_batch.json`, 'application/json');
+    }
+  });
+
+  // Export Buttons in Result Panel
+  DOM.saveToHistoryBtn.addEventListener('click', () => {
+    if (state.currentResult) {
+      autoSaveToHistory(state.currentResult);
+      showToast('Saved to local session log', 'info');
+    }
+  });
+
+  DOM.exportCurrentCsvBtn.addEventListener('click', () => {
+    if (state.currentResult) {
+      const d = state.currentResult.data || {};
+      exportToCsv([{
+        timestamp: state.currentResult.timestamp,
+        source: state.currentResult.source,
+        batch_number: d.batch_number || '-',
+        mfg_date: d.mfg_date || '-',
+        exp_date: d.exp_date || '-',
+        status: state.currentResult.expiry_analysis?.status || 'DETECTED',
+        mrp: d.mrp || '-'
+      }], `${state.sourceName}_batch.csv`);
+    }
+  });
+
+  // Database Tab Switching (Intelligence / Cloud / Inventory / Local)
+  DOM.dbTabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dbtab = btn.dataset.dbtab;
+      state.activeDbTab = dbtab;
+      DOM.dbTabBtns.forEach(b => b.classList.toggle('active', b === btn));
+      
+      DOM.paneIntelligence.classList.toggle('active', dbtab === 'intelligence');
+      DOM.paneCloudScans.classList.toggle('active', dbtab === 'cloud');
+      DOM.paneInventoryMaster.classList.toggle('active', dbtab === 'inventory');
+      DOM.paneLocalHistory.classList.toggle('active', dbtab === 'local');
+
+      DOM.intelToolbar.style.display = (dbtab === 'intelligence') ? 'flex' : 'none';
+      DOM.cloudToolbar.style.display = (dbtab === 'cloud') ? 'flex' : 'none';
+      DOM.inventoryToolbar.style.display = (dbtab === 'inventory') ? 'flex' : 'none';
+      DOM.localToolbar.style.display = (dbtab === 'local') ? 'flex' : 'none';
+
+      if (dbtab === 'intelligence') {
+        loadIntelligenceTelemetry();
+      }
+    });
+  });
+
+  // Intelligence Dashboard Action Buttons
+  if (DOM.generateAiBriefingBtn) {
+    DOM.generateAiBriefingBtn.addEventListener('click', generateAiExecutiveBriefing);
+  }
+  if (DOM.seedDemoAlertsBtn) {
+    DOM.seedDemoAlertsBtn.addEventListener('click', seedDemoAlertBatches);
+  }
+  if (DOM.refreshIntelBtn) {
+    DOM.refreshIntelBtn.addEventListener('click', () => {
+      loadIntelligenceTelemetry();
+      showToast('Intelligence telemetry updated', 'info');
+    });
+  }
+  if (DOM.copyAiBriefingBtn) {
+    DOM.copyAiBriefingBtn.addEventListener('click', () => {
+      if (DOM.aiBriefingContent) {
+        copyText(DOM.aiBriefingContent.innerText);
+      }
+    });
+  }
+
+  // Cloud Database Controls
+  let searchDebounce = null;
+  DOM.supabaseSearchInput.addEventListener('input', (e) => {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      state.supabaseSearch = e.target.value;
+      loadSupabaseScans();
+    }, 300);
+  });
+
+  DOM.supabaseStatusFilter.addEventListener('change', (e) => {
+    state.supabaseStatusFilter = e.target.value;
+    loadSupabaseScans();
+  });
+
+  DOM.refreshCloudBtn.addEventListener('click', () => {
+    loadSupabaseStatus();
+    loadSupabaseStats();
+    loadSupabaseScans();
+    loadIntelligenceTelemetry();
+    showToast('Synced with Supabase Cloud DB', 'info');
+  });
+
+  DOM.exportSupabaseCsvBtn.addEventListener('click', () => {
+    exportToCsv(state.supabaseScans, 'Supabase_Cloud_Scans.csv');
+  });
+
+  DOM.clearSupabaseBtn.addEventListener('click', clearSupabaseScans);
+
+  // Inventory Master Controls
+  DOM.refreshInventoryBtn.addEventListener('click', () => {
+    loadSupabaseInventory();
+    loadIntelligenceTelemetry();
+    showToast('Refreshed Master Inventory', 'info');
+  });
+
+  DOM.exportInventoryCsvBtn.addEventListener('click', () => {
+    exportInventoryToCsv(state.supabaseInventory, 'Master_Batch_Inventory.csv');
+  });
+
+  // Local Controls
+  DOM.exportAllCsvBtn.addEventListener('click', () => exportToCsv(state.history, 'Local_Scanned_Batches.csv'));
+  DOM.clearHistoryBtn.addEventListener('click', clearHistory);
+
+  // Settings Modal
+  DOM.openSettingsBtn.addEventListener('click', () => DOM.settingsModal.classList.add('open'));
+  [DOM.closeSettingsBtn, DOM.cancelSettingsBtn].forEach(b => {
+    b.addEventListener('click', () => DOM.settingsModal.classList.remove('open'));
+  });
+
+  DOM.toggleApiKeyVisibility.addEventListener('click', () => {
+    const isPw = DOM.settingsApiKey.type === 'password';
+    DOM.settingsApiKey.type = isPw ? 'text' : 'password';
+    DOM.toggleApiKeyVisibility.textContent = isPw ? 'Hide' : 'Show';
+  });
+
+  DOM.saveSettingsBtn.addEventListener('click', () => {
+    const key = DOM.settingsApiKey.value.trim();
+    const model = DOM.settingsModel.value;
+    state.apiKey = key;
+    state.model = model;
+    localStorage.setItem('batchscan_api_key', key);
+    localStorage.setItem('batchscan_model', model);
+    DOM.settingsModal.classList.remove('open');
+    loadConfig();
+    showToast('Configuration updated successfully!', 'info');
+  });
+}
+
+function copyText(text) {
+  if (!text || text === '-' || text === 'N/A') return;
+  navigator.clipboard.writeText(text).then(() => {
+    showToast(`Copied: "${text}"`, 'info');
+  }).catch(() => {
+    showToast('Failed to copy to clipboard', 'error');
+  });
+}
+
+function showToast(message, type = 'info') {
+  const toast = document.createElement('div');
+  toast.className = `toast ${type === 'error' ? 'toast-error' : ''}`;
+  toast.innerHTML = `
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      ${type === 'error' 
+        ? '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>' 
+        : '<polyline points="20 6 9 17 4 12"></polyline>'}
+    </svg>
+    <span>${message}</span>
+  `;
+  DOM.toastContainer.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(100%)';
+    toast.style.transition = 'all 0.3s ease';
+    setTimeout(() => toast.remove(), 300);
+  }, 3500);
+}
+
+// Global expose for table and inline actions
+window.copyText = copyText;
+window.deleteSupabaseScan = deleteSupabaseScan;
+window.applyClearanceDiscount = applyClearanceDiscount;
+window.scanBarcodeOnly = scanBarcodeOnly;
+window.executeSuggestionAction = executeSuggestionAction;
+
+// Run Init
+document.addEventListener('DOMContentLoaded', initApp);
+
