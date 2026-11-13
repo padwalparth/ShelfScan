@@ -761,7 +761,7 @@ def get_supabase_status():
 
 @app.get("/api/supabase/scans")
 def get_supabase_scans(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(100, ge=1, le=2000),
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None)
 ):
