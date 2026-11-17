@@ -71,33 +71,6 @@ export function createSettingsPage() {
     return `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-6);">
 
-        <!-- AI Vision Engine -->
-        <div class="table-panel" style="padding:var(--space-5);">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:var(--space-4);">
-            ${iconHtml('cpu', 18)}
-            <h3 style="font-size:15px;font-weight:700;">AI Vision Engine</h3>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:var(--space-3);">
-            <div class="meta-field">
-              <label>Default Vision Model</label>
-              <select class="filter-select" id="settingsModelSelect" style="width:100%;">
-                <option value="gemini-3.5-flash-lite" selected>Google Gemini 3.5 Flash-Lite (Recommended)</option>
-                <option value="gemini-3.5-flash">Google Gemini 3.5 Flash (High Precision)</option>
-                <option value="gemini-3.7-flash">Google Gemini 3.7 Flash</option>
-                <option value="meta/llama-3.2-90b-vision-instruct">NVIDIA NIM Llama 3.2 90B Vision</option>
-              </select>
-            </div>
-            <div class="meta-field">
-              <label>Gemini API Key</label>
-              <input type="password" value="••••••••••••••••••••••••••••••••••••" readonly
-                style="color:var(--accent-teal);font-family:var(--font-mono);" />
-            </div>
-            <div style="font-size:12px;color:var(--text-muted);padding:8px;background:var(--bg-subtle);border-radius:var(--radius-sm);">
-              Key sourced from <code>.env</code> — never stored in browser. Managed via <code>GEMINI_API_KEY</code>.
-            </div>
-          </div>
-        </div>
-
         <!-- Raspberry Pi Node -->
         <div class="table-panel" style="padding:var(--space-5);">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:var(--space-4);">
