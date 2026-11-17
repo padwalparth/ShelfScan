@@ -33,7 +33,8 @@ export function createDetailDrawer(onRefreshNeeded = null) {
     const imageUrl = scan.cropped_image_path || scan.image_url || scan.original_image_path || '';
     const fullImageUrl = imageUrl ? (imageUrl.startsWith('http') ? imageUrl : `${window.location.origin}${imageUrl}`) : '';
     const bno = scan.batch_number || 'UNKNOWN';
-    const model = scan.model_used || 'Google Gemini 3.5 Flash-Lite';
+    const rawModel = scan.model_used || '';
+    const model = (rawModel && !/gemini/i.test(rawModel)) ? rawModel : 'Rapid OCR';
 
     drawer.innerHTML = `
       <div class="drawer-header">

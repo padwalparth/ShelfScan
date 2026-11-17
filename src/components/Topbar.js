@@ -36,7 +36,7 @@ export function createTopbar() {
           <div class="status-tooltip">
             <div class="tooltip-row">
               <span>AI Vision Engine</span>
-              <span>Online (Gemini Flash)</span>
+              <span>Online (Rapid OCR)</span>
             </div>
             <div class="tooltip-row">
               <span>Raspberry Pi Node</span>

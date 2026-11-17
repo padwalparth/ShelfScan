@@ -39,7 +39,7 @@ export function createScanPage() {
       const data = await extractLabel(formData);
       extractionResult = data;
       currentStep = 2;
-      showToast('Label successfully ingested with Gemini Vision!', 'success');
+      showToast('Label successfully ingested with Rapid OCR!', 'success');
     } catch (err) {
       showToast('Extraction failed: ' + err.message, 'error');
     } finally {
@@ -179,7 +179,7 @@ export function createScanPage() {
         ${isExtracting ? `
           <div style="margin-top:var(--space-4);padding:var(--space-5);background:var(--bg-card);border-radius:var(--radius-md);border:1px solid var(--border-subtle);text-align:center;">
             <div style="width:36px;height:36px;border:3px solid var(--accent-teal);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto var(--space-3);"></div>
-            <div style="font-weight:600;margin-bottom:4px;">Analyzing Packaging Label with Gemini Vision AI</div>
+            <div style="font-weight:600;margin-bottom:4px;">Analyzing Packaging Label with Rapid OCR Engine</div>
             <div style="font-size:12px;color:var(--text-muted);">Detecting dot-matrix stamps, barcodes &amp; statutory fields…</div>
           </div>
         ` : ''}
@@ -233,7 +233,7 @@ export function createScanPage() {
             }
           </div>
           <div style="margin-top:12px;display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);">
-            <span>Model: ${res.model_used || 'Gemini Flash-Lite'}</span>
+            <span>Model: ${(res.model_used && !/gemini/i.test(res.model_used)) ? res.model_used : 'Rapid OCR'}</span>
             <span>Time: ${res.processing_time || '—'}</span>
           </div>
 
