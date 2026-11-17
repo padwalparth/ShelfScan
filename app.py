@@ -123,7 +123,7 @@ You must extract and return a valid JSON object strictly matching this schema:
   "batch_number": "Exact batch / lot number (e.g. F28H97, FK11G2601, B.No, Lot No.)",
   "mfg_date": "Manufacturing date in DD/MM/YYYY or original format (e.g. 14/08/2026)",
   "exp_date": "Expiry / Best Before date in DD/MM/YYYY or original format (e.g. 13/08/2027)",
-  "mrp": "Maximum Retail Price / Price with currency (e.g. Rs. 300.00, Rs. 110.00, ₹300)",
+  "mrp": "Maximum Retail Price NUMERIC value with currency (e.g. ₹ 489.00, Rs. 50.00). Look carefully to the right of 'MRP (INCL. OF ALL TAXES)' or adjacent lines. If only the words 'MRP' are visible without any digits, return null.",
   "product_name": "Product, brand, or drug name if visible on the label (or null)",
   "manufacturer": "Manufacturer name and address if visible (or null)",
   "full_text": "Complete transcribed raw text extracted line-by-line from the label image",
@@ -153,6 +153,28 @@ def get_nvidia_key(user_key: Optional[str] = None) -> str:
 def get_default_api_key() -> str:
     return get_gemini_key() or get_nvidia_key()
 
+def _sanitize_ocr_dict(d: dict) -> dict:
+    if not isinstance(d, dict):
+        return d
+    mrp_val = d.get("mrp")
+    if mrp_val and isinstance(mrp_val, str):
+        # If mrp has no numeric digits or is boilerplate like 'MRP ₹ (INCL. OF ALL TAXES)'
+        if not re.search(r"\d", mrp_val) or any(x in mrp_val.lower() for x in ["incl. of all", "incl of all", "inclusive of all"]):
+            # Check if there are digits in mrp_val
+            digits = re.search(r"(?:₹|rs\.?|inr)?\s*(\d+(?:\.\d{1,2})?)", mrp_val, re.IGNORECASE)
+            if digits:
+                d["mrp"] = f"₹ {digits.group(1)}"
+            else:
+                # Search full_text for price digits
+                full_txt = d.get("full_text") or ""
+                price_in_full = re.search(r"(?:mrp|₹|rs\.?)\s*(?:\(incl[^\)]*\))?\s*[:\-]?\s*(?:₹|rs\.?)?\s*(\d+(?:\.\d{1,2})?)", full_txt, re.IGNORECASE)
+                if price_in_full:
+                    d["mrp"] = f"₹ {price_in_full.group(1)}"
+                else:
+                    d["mrp"] = None
+    return d
+
+
 def extract_json_from_text(text: str) -> Dict[str, Any]:
     text = text.strip()
     
@@ -160,7 +182,7 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict) and ("batch_number" in parsed or "mfg_date" in parsed):
-            return parsed
+            return _sanitize_ocr_dict(parsed)
     except Exception:
         pass
 
@@ -170,7 +192,7 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
         try:
             parsed = json.loads(match.group(1))
             if isinstance(parsed, dict):
-                return parsed
+                return _sanitize_ocr_dict(parsed)
         except Exception:
             pass
 
@@ -180,7 +202,7 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
         try:
             parsed = json.loads(brace_match.group(1))
             if isinstance(parsed, dict):
-                return parsed
+                return _sanitize_ocr_dict(parsed)
         except Exception:
             pass
 
