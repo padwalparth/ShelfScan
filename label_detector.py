@@ -258,13 +258,13 @@ def detect_label_opencv(
         orig_h = int(bh / scale)
 
         # Add adaptive padding to avoid cutting off edge characters (e.g. "MFG", "EXP", "Rs.")
-        pad_x = int(orig_w * padding_pct)
-        pad_y = int(orig_h * padding_pct)
+        pad_x = max(20, int(orig_w * max(0.15, padding_pct)))
+        pad_y = max(30, int(orig_h * max(0.20, padding_pct)))
 
         x1 = max(0, orig_x - pad_x)
         y1 = max(0, orig_y - pad_y)
         x2 = min(w, orig_x + orig_w + pad_x)
-        y2 = min(h, orig_y + orig_h + pad_y)
+        y2 = min(h, orig_y + orig_h + int(pad_y * 1.5))
 
         # Compute confidence based on edge density & contrast
         conf = min(0.96, max(0.55, best['density'] / 65.0))
@@ -350,11 +350,12 @@ def detect_statutory_area_gemini(
 
     # Try multiple model fallback order
     gemini_models = [
+        "gemini-2.5-flash",
         "gemini-3.5-flash-lite",
-        "gemini-flash-lite-latest",
+        "gemini-flash-latest",
         "gemini-3.5-flash",
+        "gemini-1.5-flash",
         "gemini-3.8-flash",
-        "gemini-3.7-flash",
     ]
 
     for model_name in gemini_models:
@@ -375,7 +376,7 @@ def detect_statutory_area_gemini(
             }
         }
         try:
-            resp = _http_requests.post(url, json=payload, timeout=15)
+            resp = _http_requests.post(url, json=payload, timeout=8)
             if resp.status_code == 200:
                 txt = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
                 parsed = json.loads(txt)
@@ -390,8 +391,8 @@ def detect_statutory_area_gemini(
 
                     # Add safety padding
                     bw, bh = x2 - x1, y2 - y1
-                    pad_x = max(5, int(bw * padding_pct))
-                    pad_y = max(5, int(bh * padding_pct))
+                    pad_x = max(10, int(bw * 0.18))
+                    pad_y = max(10, int(bh * 0.18))
                     x1 = max(0, x1 - pad_x)
                     y1 = max(0, y1 - pad_y)
                     x2 = min(w, x2 + pad_x)
@@ -400,11 +401,10 @@ def detect_statutory_area_gemini(
                     # Reject if box is degenerate (too thin/small or full frame)
                     if (x2 - x1) < 20 or (y2 - y1) < 10:
                         print(f"[LabelDetector] Gemini box too small ({x2-x1}x{y2-y1}), skipping.")
-                        return None
+                        continue
                     if (x2 - x1) >= int(w * 0.97) and (y2 - y1) >= int(h * 0.97):
-                        # Full frame — not useful, let OpenCV handle
-                        print("[LabelDetector] Gemini returned full-frame box, falling back to OpenCV.")
-                        return None
+                        # Full frame — keep with generous bounds
+                        pass
 
                     conf = float(parsed.get("confidence", 0.88))
                     fields = parsed.get("fields_found", [])
@@ -422,17 +422,14 @@ def detect_statutory_area_gemini(
                         'fields_found': fields
                     }
                 else:
-                    print(f"[LabelDetector] Gemini ({model_name}) returned no statutory_box_2d.")
-                    return None
-            elif resp.status_code in (404, 410):
-                # Model unavailable, try next
-                continue
+                    print(f"[LabelDetector] Gemini ({model_name}) returned no statutory_box_2d, trying next.")
+                    continue
             else:
-                print(f"[LabelDetector] Gemini ({model_name}) HTTP {resp.status_code}: {resp.text[:100]}")
-                return None
+                print(f"[LabelDetector] Gemini ({model_name}) HTTP {resp.status_code}, trying next model.")
+                continue
         except Exception as exc:
-            print(f"[LabelDetector] Gemini statutory detection error ({model_name}): {exc}")
-            return None
+            print(f"[LabelDetector] Gemini ({model_name}) error ({exc}), trying next model.")
+            continue
 
     return None
 
