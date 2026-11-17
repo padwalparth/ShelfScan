@@ -786,6 +786,25 @@ def get_supabase_scans(
             s["is_critical"] = exp_info.get("is_critical_4_days", False)
             s["alert_directive"] = exp_info.get("alert_directive", "")
 
+            # Resolve image URLs from extracted_json or columns
+            ej = s.get("extracted_json") or {}
+            crop_p = s.get("cropped_image_path") or ej.get("cropped_image_path")
+            orig_p = s.get("original_image_path") or ej.get("original_image_path")
+            enh_p = s.get("enhanced_image_path") or ej.get("enhanced_image_path")
+
+            if crop_p:
+                crop_fn = os.path.basename(str(crop_p).replace("\\", "/"))
+                s["cropped_image_path"] = f"/api/images/cropped/{crop_fn}"
+                s["image_url"] = f"/api/images/cropped/{crop_fn}"
+            elif orig_p:
+                orig_fn = os.path.basename(str(orig_p).replace("\\", "/"))
+                s["original_image_path"] = f"/api/images/original/{orig_fn}"
+                s["image_url"] = f"/api/images/original/{orig_fn}"
+            elif enh_p:
+                enh_fn = os.path.basename(str(enh_p).replace("\\", "/"))
+                s["enhanced_image_path"] = f"/api/images/enhanced/{enh_fn}"
+                s["image_url"] = f"/api/images/enhanced/{enh_fn}"
+
         # Dynamic status filtering
         if status and status.upper() != "ALL":
             st = status.upper()
@@ -1817,28 +1836,29 @@ def get_rpi_last_capture():
 
 @app.get("/api/images/original/{filename}")
 def serve_original_image(filename: str):
-    path = os.path.join(ORIGINAL_DIR, filename)
-    if not os.path.exists(path):
-        path = os.path.join(IMAGES_DIR, filename)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Original image not found")
-    return FileResponse(path)
+    for d in [ORIGINAL_DIR, IMAGES_DIR, CROPPED_DIR, ENHANCED_DIR]:
+        path = os.path.join(d, filename)
+        if os.path.exists(path):
+            return FileResponse(path)
+    raise HTTPException(status_code=404, detail="Original image not found")
 
 
 @app.get("/api/images/cropped/{filename}")
 def serve_cropped_image(filename: str):
-    path = os.path.join(CROPPED_DIR, filename)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Cropped image not found")
-    return FileResponse(path)
+    for d in [CROPPED_DIR, ORIGINAL_DIR, ENHANCED_DIR, IMAGES_DIR]:
+        path = os.path.join(d, filename)
+        if os.path.exists(path):
+            return FileResponse(path)
+    raise HTTPException(status_code=404, detail="Cropped image not found")
 
 
 @app.get("/api/images/enhanced/{filename}")
 def serve_enhanced_image(filename: str):
-    path = os.path.join(ENHANCED_DIR, filename)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Enhanced image not found")
-    return FileResponse(path)
+    for d in [ENHANCED_DIR, CROPPED_DIR, ORIGINAL_DIR, IMAGES_DIR]:
+        path = os.path.join(d, filename)
+        if os.path.exists(path):
+            return FileResponse(path)
+    raise HTTPException(status_code=404, detail="Enhanced image not found")
 
 
 @app.post("/api/barcode/scan")

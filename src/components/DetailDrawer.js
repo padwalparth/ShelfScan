@@ -30,7 +30,14 @@ export function createDetailDrawer(onRefreshNeeded = null) {
     backdrop.classList.add('open');
     drawer.classList.add('open');
 
-    const imageUrl = scan.cropped_image_path || scan.image_url || scan.original_image_path || '';
+    const ej = scan.extracted_json || {};
+    let imageUrl = scan.cropped_image_path || scan.image_url || scan.original_image_path || ej.cropped_image_path || ej.original_image_path || ej.enhanced_image_path || '';
+    if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('/api/')) {
+      const fn = imageUrl.split(/[\\/]/).pop();
+      if (fn) {
+        imageUrl = `/api/images/cropped/${fn}`;
+      }
+    }
     const fullImageUrl = imageUrl ? (imageUrl.startsWith('http') ? imageUrl : `${window.location.origin}${imageUrl}`) : '';
     const bno = scan.batch_number || 'UNKNOWN';
     const rawModel = scan.model_used || '';
