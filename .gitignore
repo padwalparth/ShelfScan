@@ -37,3 +37,8 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Dynamic test captures from live camera testing
+images/cropped/2026*
+images/enhanced/2026*
+images/original/2026*
+
